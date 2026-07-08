@@ -1,0 +1,147 @@
+# Fork-only pipeline: build linux/amd64 backend + web images and push to Docker Hub.
+# Upstream release.yml publishes multi-arch images to GHCR on version tags; this
+# workflow is additive and scoped to wccdev/multica.
+#
+# Required repository secrets:
+#   DOCKER_USERNAME
+#   DOCKER_PASSWORD
+name: Docker Hub amd64
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    if: github.repository == 'wccdev/multica'
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      is_tag: ${{ steps.meta.outputs.is_tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve build version
+        id: meta
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            echo "version=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+            echo "is_tag=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=main" >> "$GITHUB_OUTPUT"
+            echo "is_tag=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.sum
+
+      - name: Run tests
+        run: cd server && go test -race ./...
+
+  docker-backend:
+    needs: verify
+    runs-on: ubuntu-latest
+    concurrency:
+      group: dockerhub-backend-${{ github.ref }}
+      cancel-in-progress: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Compute backend image labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ secrets.DOCKER_USERNAME }}/multica-backend
+          labels: |
+            org.opencontainers.image.title=Multica Backend
+            org.opencontainers.image.description=Multica self-hosted backend (amd64 fork build)
+          tags: |
+            type=raw,value=latest,enable=${{ needs.verify.outputs.is_tag == 'false' }}
+            type=raw,value=${{ needs.verify.outputs.version }},enable=${{ needs.verify.outputs.is_tag == 'true' }}
+            type=sha,prefix=sha-
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Build and push backend (linux/amd64)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          pull: true
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=dockerhub-backend-amd64
+          cache-to: type=gha,mode=max,scope=dockerhub-backend-amd64
+          build-args: |
+            VERSION=${{ needs.verify.outputs.version }}
+            COMMIT=${{ github.sha }}
+
+  docker-web:
+    needs: verify
+    runs-on: ubuntu-latest
+    concurrency:
+      group: dockerhub-web-${{ github.ref }}
+      cancel-in-progress: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Compute web image labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ secrets.DOCKER_USERNAME }}/multica-web
+          labels: |
+            org.opencontainers.image.title=Multica Web
+            org.opencontainers.image.description=Multica self-hosted web frontend (amd64 fork build)
+          tags: |
+            type=raw,value=latest,enable=${{ needs.verify.outputs.is_tag == 'false' }}
+            type=raw,value=${{ needs.verify.outputs.version }},enable=${{ needs.verify.outputs.is_tag == 'true' }}
+            type=sha,prefix=sha-
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Build and push web (linux/amd64)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.web
+          pull: true
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=dockerhub-web-amd64
+          cache-to: type=gha,mode=max,scope=dockerhub-web-amd64
+          build-args: |
+            REMOTE_API_URL=http://backend:8080
+            NEXT_PUBLIC_APP_VERSION=${{ needs.verify.outputs.version }}

@@ -63,6 +63,10 @@ export function AuthInitializer({
           // (the managed-cloud default) rather than blocking the UI.
           workspaceCreationDisabled: cfg.workspace_creation_disabled === true,
         });
+        configStore.getState().setCasdoorConfig({
+          casdoorClientId: cfg.casdoor_client_id,
+          casdoorEndpoint: cfg.casdoor_endpoint,
+        });
         configStore.getState().setDaemonConfig({
           daemonServerUrl: cfg.daemon_server_url,
           daemonAppUrl: cfg.daemon_app_url,
