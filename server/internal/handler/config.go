@@ -25,6 +25,9 @@ type AppConfig struct {
 	// toggle signup or wire Google OAuth.
 	AllowSignup    bool   `json:"allow_signup"`
 	GoogleClientID string `json:"google_client_id,omitempty"`
+	// Casdoor OIDC config for fork/self-host SSO. Client secret stays server-side.
+	CasdoorClientID  string `json:"casdoor_client_id,omitempty"`
+	CasdoorEndpoint  string `json:"casdoor_endpoint,omitempty"`
 	// WorkspaceCreationDisabled mirrors the server-side
 	// DISABLE_WORKSPACE_CREATION env var so the UI can hide every
 	// "Create workspace" affordance on self-hosted instances. Omitted
@@ -59,6 +62,8 @@ func (h *Handler) GetConfig(w http.ResponseWriter, r *http.Request) {
 	config := AppConfig{
 		AllowSignup:               os.Getenv("ALLOW_SIGNUP") != "false",
 		GoogleClientID:            os.Getenv("GOOGLE_CLIENT_ID"),
+		CasdoorClientID:           os.Getenv("CASDOOR_CLIENT_ID"),
+		CasdoorEndpoint:           casdoorEndpointFromEnv(),
 		WorkspaceCreationDisabled: os.Getenv("DISABLE_WORKSPACE_CREATION") == "true",
 	}
 	if h.Storage != nil {

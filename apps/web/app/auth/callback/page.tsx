@@ -23,6 +23,7 @@ function CallbackContent() {
   const searchParams = useSearchParams();
   const qc = useQueryClient();
   const loginWithGoogle = useAuthStore((s) => s.loginWithGoogle);
+  const loginWithCasdoor = useAuthStore((s) => s.loginWithCasdoor);
   const [error, setError] = useState("");
   const [desktopToken, setDesktopToken] = useState<string | null>(null);
 
@@ -41,6 +42,7 @@ function CallbackContent() {
 
     const state = searchParams.get("state") || "";
     const stateParts = state.split(",");
+    const isCasdoor = stateParts.includes("provider:casdoor");
     const isDesktop = stateParts.includes("platform:desktop");
     const nextPart = stateParts.find((p) => p.startsWith("next:"));
     // Strip "next:" prefix, then drop anything that isn't a safe relative path
@@ -61,6 +63,16 @@ function CallbackContent() {
 
     const redirectUri = `${window.location.origin}/auth/callback`;
 
+    const exchangeCode = (authCode: string) =>
+      isCasdoor
+        ? api.casdoorLogin(authCode, redirectUri)
+        : api.googleLogin(authCode, redirectUri);
+
+    const completeWebLogin = (authCode: string) =>
+      isCasdoor
+        ? loginWithCasdoor(authCode, redirectUri)
+        : loginWithGoogle(authCode, redirectUri);
+
     // Validate the CLI callback URL before redirecting — the state parameter
     // passes through Google OAuth and must be treated as attacker-controlled.
     const cliCallback =
@@ -69,10 +81,9 @@ function CallbackContent() {
         : null;
 
     if (cliCallback) {
-      // CLI login flow: exchange the Google code for a JWT, then redirect the
+      // CLI login flow: exchange the OAuth code for a JWT, then redirect the
       // token back to the CLI's local HTTP listener (e.g. WSL2 host).
-      api
-        .googleLogin(code, redirectUri)
+      exchangeCode(code)
         .then(({ token }) => {
           redirectToCliCallback(cliCallback, token, cliState);
         })
@@ -81,8 +92,7 @@ function CallbackContent() {
         });
     } else if (isDesktop) {
       // Desktop flow: exchange code for token, then redirect via deep link
-      api
-        .googleLogin(code, redirectUri)
+      exchangeCode(code)
         .then(({ token }) => {
           setDesktopToken(token);
           window.location.href = `multica://auth/callback?token=${encodeURIComponent(token)}`;
@@ -92,7 +102,7 @@ function CallbackContent() {
         });
     } else {
       // Normal web flow
-      loginWithGoogle(code, redirectUri)
+      completeWebLogin(code)
         .then(async (loggedInUser) => {
           const wsList = await api.listWorkspaces();
           qc.setQueryData(workspaceKeys.list(), wsList);
@@ -141,7 +151,7 @@ function CallbackContent() {
           setError(err instanceof Error ? err.message : "Login failed");
         });
     }
-  }, [searchParams, loginWithGoogle, router, qc]);
+  }, [searchParams, loginWithGoogle, loginWithCasdoor, router, qc]);
 
   if (desktopToken) {
     return (

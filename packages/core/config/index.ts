@@ -9,6 +9,8 @@ interface ConfigState {
   cdnSigned: boolean;
   allowSignup: boolean;
   googleClientId: string;
+  casdoorClientId: string;
+  casdoorEndpoint: string;
   daemonServerUrl: string;
   daemonAppUrl: string;
   // Self-host gate (#3433): when true, every "Create workspace" affordance
@@ -22,6 +24,10 @@ interface ConfigState {
     googleClientId?: string;
     workspaceCreationDisabled?: boolean;
   }) => void;
+  setCasdoorConfig: (config: {
+    casdoorClientId?: string;
+    casdoorEndpoint?: string;
+  }) => void;
   setDaemonConfig: (config: {
     daemonServerUrl?: string;
     daemonAppUrl?: string;
@@ -34,6 +40,8 @@ export const configStore = createStore<ConfigState>((set) => ({
   cdnSigned: false,
   allowSignup: true,
   googleClientId: "",
+  casdoorClientId: "",
+  casdoorEndpoint: "",
   daemonServerUrl: "",
   daemonAppUrl: "",
   workspaceCreationDisabled: false,
@@ -41,6 +49,8 @@ export const configStore = createStore<ConfigState>((set) => ({
   setCdnConfig: ({ cdnDomain, cdnSigned = false }) => set({ cdnDomain, cdnSigned }),
   setAuthConfig: ({ allowSignup, googleClientId = "", workspaceCreationDisabled = false }) =>
     set({ allowSignup, googleClientId, workspaceCreationDisabled }),
+  setCasdoorConfig: ({ casdoorClientId = "", casdoorEndpoint = "" }) =>
+    set({ casdoorClientId, casdoorEndpoint }),
   setDaemonConfig: ({ daemonServerUrl = "", daemonAppUrl = "" }) =>
     set({ daemonServerUrl, daemonAppUrl }),
   setFeatureFlags: (flags = {}) => set({ featureFlags: { ...flags } }),

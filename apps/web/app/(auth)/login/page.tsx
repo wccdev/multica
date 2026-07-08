@@ -28,6 +28,10 @@ import { Loader2 } from "lucide-react";
 import { setLoggedInCookie } from "@/features/auth/auth-cookie";
 import Link from "next/link";
 import { LoginPage, validateCliCallback } from "@multica/views/auth";
+import {
+  CasdoorLoginButton,
+  withCasdoorProviderState,
+} from "@/features/auth/casdoor-login-button";
 import { useT } from "@multica/views/i18n";
 
 /**
@@ -165,6 +169,8 @@ function LoginPageContent() {
     .filter(Boolean)
     .join(",") || undefined;
 
+  const casdoorState = withCasdoorProviderState(googleState);
+
   // While the desktop handoff is in progress (or has produced a token/error),
   // render a dedicated screen instead of flashing the login form or redirecting
   // away to a workspace page.
@@ -234,15 +240,18 @@ function LoginPageContent() {
       }
       onTokenObtained={setLoggedInCookie}
       extra={
-        <span className="text-xs text-muted-foreground">
-          {t(($) => $.web.prefer_desktop)}{" "}
-          <Link
-            href="/download"
-            className="font-medium text-foreground underline decoration-foreground/30 underline-offset-4 hover:decoration-foreground/70"
-          >
-            {t(($) => $.web.download)}
-          </Link>
-        </span>
+        <div className="flex w-full flex-col gap-3">
+          <CasdoorLoginButton state={casdoorState} />
+          <span className="text-xs text-muted-foreground">
+            {t(($) => $.web.prefer_desktop)}{" "}
+            <Link
+              href="/download"
+              className="font-medium text-foreground underline decoration-foreground/30 underline-offset-4 hover:decoration-foreground/70"
+            >
+              {t(($) => $.web.download)}
+            </Link>
+          </span>
+        </div>
       }
     />
   );
