@@ -114,6 +114,10 @@ import type {
   GitHubPullRequest,
   ListGitHubInstallationsResponse,
   GitHubConnectResponse,
+  GiteaConnection,
+  GiteaPullRequest,
+  GetGiteaConnectionResponse,
+  GiteaSyncResponse,
   ListLarkInstallationsResponse,
   BeginLarkInstallResponse,
   LarkInstallStatusResponse,
@@ -233,6 +237,14 @@ import {
   EMPTY_LABEL,
   EMPTY_LIST_LABELS_RESPONSE,
   EMPTY_RESOURCE_LABELS_RESPONSE,
+  GetGiteaConnectionResponseSchema,
+  EMPTY_GITEA_CONNECTION_RESPONSE,
+  RegisterGiteaConnectionResponseSchema,
+  EMPTY_REGISTER_GITEA_CONNECTION_RESPONSE,
+  ListIssueGiteaPullRequestsResponseSchema,
+  EMPTY_ISSUE_GITEA_PULL_REQUESTS,
+  GiteaSyncResponseSchema,
+  EMPTY_GITEA_SYNC_RESPONSE,
 } from "./schemas";
 
 /** Identifies the calling client to the server.
@@ -2415,6 +2427,45 @@ export class ApiClient {
 
   async listIssuePullRequests(issueId: string): Promise<{ pull_requests: GitHubPullRequest[] }> {
     return this.fetch(`/api/issues/${issueId}/pull-requests`);
+  }
+
+  // Gitea integration (bring-your-own PAT — see server/internal/handler/gitea.go)
+  async registerGiteaConnection(
+    workspaceId: string,
+    token: string,
+  ): Promise<{ connection: GiteaConnection | null }> {
+    const raw = await this.fetch<unknown>(`/api/workspaces/${workspaceId}/gitea/install`, {
+      method: "POST",
+      body: JSON.stringify({ token }),
+    });
+    return parseWithFallback(raw, RegisterGiteaConnectionResponseSchema, EMPTY_REGISTER_GITEA_CONNECTION_RESPONSE, {
+      endpoint: "POST /api/workspaces/:id/gitea/install",
+    });
+  }
+
+  async getGiteaConnection(workspaceId: string): Promise<GetGiteaConnectionResponse> {
+    const raw = await this.fetch<unknown>(`/api/workspaces/${workspaceId}/gitea/connection`);
+    return parseWithFallback(raw, GetGiteaConnectionResponseSchema, EMPTY_GITEA_CONNECTION_RESPONSE, {
+      endpoint: "GET /api/workspaces/:id/gitea/connection",
+    });
+  }
+
+  async deleteGiteaConnection(workspaceId: string): Promise<void> {
+    await this.fetch(`/api/workspaces/${workspaceId}/gitea/connection`, { method: "DELETE" });
+  }
+
+  async syncGiteaRepositories(workspaceId: string): Promise<GiteaSyncResponse> {
+    const raw = await this.fetch<unknown>(`/api/workspaces/${workspaceId}/gitea/sync`, { method: "POST" });
+    return parseWithFallback(raw, GiteaSyncResponseSchema, EMPTY_GITEA_SYNC_RESPONSE, {
+      endpoint: "POST /api/workspaces/:id/gitea/sync",
+    });
+  }
+
+  async listIssueGiteaPullRequests(issueId: string): Promise<{ pull_requests: GiteaPullRequest[] }> {
+    const raw = await this.fetch<unknown>(`/api/issues/${issueId}/gitea-pull-requests`);
+    return parseWithFallback(raw, ListIssueGiteaPullRequestsResponseSchema, EMPTY_ISSUE_GITEA_PULL_REQUESTS, {
+      endpoint: "GET /api/issues/:id/gitea-pull-requests",
+    });
   }
 
   // Lark integration

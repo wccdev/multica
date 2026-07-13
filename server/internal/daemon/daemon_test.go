@@ -1709,7 +1709,7 @@ func TestEnsureRepoReadyCachedRepoStillRefreshesSettings(t *testing.T) {
 			WorkspaceID:  "ws-1",
 			Repos:        []RepoData{{URL: sourceRepo}},
 			ReposVersion: "v2",
-			Settings:     json.RawMessage(`{"github_enabled":false,"co_authored_by_enabled":true}`),
+			Settings:     json.RawMessage(`{"github_enabled":false,"gitea_enabled":false,"co_authored_by_enabled":true}`),
 		})
 	})
 	if err := d.repoCache.Sync("ws-1", []repocache.RepoInfo{{URL: sourceRepo}}); err != nil {

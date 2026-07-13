@@ -172,6 +172,7 @@
     "section_properties": "Properties",
     "section_parent_issue": "Parent issue",
     "section_pull_requests": "Pull requests",
+    "section_gitea_pull_requests": "Pull requests (Gitea)",
     "section_metadata": "Metadata",
     "section_details": "Details",
     "section_token_usage": "Token usage",

@@ -121,6 +121,13 @@ export type {
   GitHubConnectResponse,
 } from "./github";
 export type {
+  GiteaConnection,
+  GiteaPullRequest,
+  GiteaPullRequestState,
+  GetGiteaConnectionResponse,
+  GiteaSyncResponse,
+} from "./gitea";
+export type {
   LarkInstallation,
   ListLarkInstallationsResponse,
   BeginLarkInstallResponse,

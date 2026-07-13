@@ -1219,13 +1219,20 @@ func (d *Daemon) workspaceLastRepoSyncErr(workspaceID string) string {
 }
 
 // workspaceCoAuthoredByEnabled returns whether the Co-authored-by hook should
-// be installed for the given workspace. Defaults to true when either setting
-// is absent (new workspaces, older servers that don't send settings).
+// be installed for the given workspace. Defaults to true when settings are
+// absent or malformed (new workspaces, older servers that don't send
+// settings).
 //
-// The hook is gated by BOTH the GitHub master switch (`github_enabled`) and
-// the dedicated co-author switch (`co_authored_by_enabled`) so flipping the
-// workspace's master GitHub toggle off also stops new trailers from landing
-// in commits, matching the contract documented in RFC MUL-2414 §4.8.
+// The hook itself (installCoAuthoredByHook in repocache/cache.go) is a plain
+// git prepare-commit-msg hook applied to every cloned repo — it has no
+// notion of which git host that repo lives on. The single shared
+// `co_authored_by_enabled` switch controls it from both the GitHub and Gitea
+// settings tabs. A provider's master switch (`github_enabled` /
+// `gitea_enabled`) only forces the hook off when BOTH are explicitly false:
+// a workspace using only Gitea (GitHub left at its default-enabled value it
+// never touches) must not have its Gitea commits silently lose the trailer
+// because of GitHub's switch, and vice versa. This mirrors the contract
+// documented in RFC MUL-2414 §4.8, extended to cover Gitea.
 func (d *Daemon) workspaceCoAuthoredByEnabled(workspaceID string) bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -1235,12 +1242,15 @@ func (d *Daemon) workspaceCoAuthoredByEnabled(workspaceID string) bool {
 	}
 	var s struct {
 		GitHubEnabled       *bool `json:"github_enabled"`
+		GiteaEnabled        *bool `json:"gitea_enabled"`
 		CoAuthoredByEnabled *bool `json:"co_authored_by_enabled"`
 	}
 	if err := json.Unmarshal(ws.settings, &s); err != nil {
 		return true // default: enabled when payload is malformed
 	}
-	if s.GitHubEnabled != nil && !*s.GitHubEnabled {
+	githubOff := s.GitHubEnabled != nil && !*s.GitHubEnabled
+	giteaOff := s.GiteaEnabled != nil && !*s.GiteaEnabled
+	if githubOff && giteaOff {
 		return false
 	}
 	if s.CoAuthoredByEnabled == nil {

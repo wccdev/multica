@@ -170,6 +170,7 @@
     "section_properties": "속성",
     "section_parent_issue": "상위 이슈",
     "section_pull_requests": "Pull requests",
+    "section_gitea_pull_requests": "Pull requests (Gitea)",
     "section_metadata": "메타데이터",
     "section_details": "세부 정보",
     "section_token_usage": "토큰 사용량",

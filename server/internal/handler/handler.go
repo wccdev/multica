@@ -23,6 +23,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/integrations/channel/engine"
 	composio "github.com/multica-ai/multica/server/internal/integrations/composio"
+	"github.com/multica-ai/multica/server/internal/integrations/gitea"
 	"github.com/multica-ai/multica/server/internal/integrations/lark"
 	"github.com/multica-ai/multica/server/internal/integrations/slack"
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
@@ -209,6 +210,12 @@ type Handler struct {
 	// unless Slack is configured; GetChatChannelHistory then reports "no channel
 	// integration". A future platform satisfies the same reader interface.
 	SlackHistory ChatChannelHistoryReader
+	// GiteaInstall owns the bring-your-own-token Gitea connection lifecycle
+	// (validate + persist a pasted PAT, sync repo webhooks, decrypt for API
+	// calls) and the at-rest encryption of the stored token. Nil unless
+	// MULTICA_GITEA_SECRET_KEY is set. Fully independent of the GitHub
+	// integration — see server/internal/handler/gitea.go.
+	GiteaInstall *gitea.InstallService
 	// LLM is the basic LLM API layer (MUL-4238): a thin wrapper over the
 	// OpenAI Go SDK backing server-internal one-shot LLM helpers such as chat
 	// title generation. The generic passthrough endpoints were removed in

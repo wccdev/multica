@@ -63,7 +63,9 @@ import { collectThreadReplies, deriveThreadResolution } from "./thread-utils";
 import { IssueAgentHeaderChip } from "./issue-agent-header-chip";
 import { ExecutionLogSection } from "./execution-log-section";
 import { PullRequestList } from "./pull-request-list";
+import { GiteaPullRequestList } from "./gitea-pull-request-list";
 import { useGitHubSettings } from "@multica/core/github";
+import { useGiteaSettings } from "@multica/core/gitea";
 import { useQuery } from "@tanstack/react-query";
 import { useAuthStore } from "@multica/core/auth";
 import { useWorkspacePaths } from "@multica/core/paths";
@@ -748,9 +750,11 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
   const [detailsOpen, setDetailsOpen] = useState(true);
   const [parentIssueOpen, setParentIssueOpen] = useState(true);
   const [pullRequestsOpen, setPullRequestsOpen] = useState(true);
+  const [giteaPullRequestsOpen, setGiteaPullRequestsOpen] = useState(true);
   const [metadataOpen, setMetadataOpen] = useState(false);
   const [tokenUsageOpen, setTokenUsageOpen] = useState(true);
   const githubSettings = useGitHubSettings();
+  const giteaSettings = useGiteaSettings();
 
   // Per-issue, per-session set of optional properties currently visible in
   // the sidebar Properties section. Seeded on issue switch with whichever
@@ -1666,6 +1670,24 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
             <ChevronRight className={`!size-3 shrink-0 stroke-[2.5] text-muted-foreground transition-transform ${pullRequestsOpen ? "rotate-90" : ""}`} />
           </button>
           {pullRequestsOpen && <div className="pl-2"><PullRequestList issueId={id} /></div>}
+        </div>
+      )}
+
+      {/* Gitea pull requests — independent of the GitHub section above, so
+          both can render side by side if a workspace somehow has both
+          integrations connected. Hidden when the workspace disables the PR
+          sidebar (or the Gitea master switch is off). */}
+      {giteaSettings.prSidebar && (
+        <div>
+          <button
+            type="button"
+            className={`flex w-full items-center gap-1 rounded-md px-2 py-1 text-xs font-medium transition-colors mb-2 hover:bg-accent/70 ${giteaPullRequestsOpen ? "" : "text-muted-foreground hover:text-foreground"}`}
+            onClick={() => setGiteaPullRequestsOpen(!giteaPullRequestsOpen)}
+          >
+            {t(($) => $.detail.section_gitea_pull_requests)}
+            <ChevronRight className={`!size-3 shrink-0 stroke-[2.5] text-muted-foreground transition-transform ${giteaPullRequestsOpen ? "rotate-90" : ""}`} />
+          </button>
+          {giteaPullRequestsOpen && <div className="pl-2"><GiteaPullRequestList issueId={id} /></div>}
         </div>
       )}
 

@@ -170,6 +170,7 @@
     "section_properties": "プロパティ",
     "section_parent_issue": "親イシュー",
     "section_pull_requests": "Pull requests",
+    "section_gitea_pull_requests": "Pull requests (Gitea)",
     "section_metadata": "メタデータ",
     "section_details": "詳細",
     "section_token_usage": "トークン使用量",

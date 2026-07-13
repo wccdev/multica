@@ -142,4 +142,13 @@ const (
 	// invalidate the Slack installations query on either.
 	EventSlackInstallationCreated = "slack_installation:created"
 	EventSlackInstallationRevoked = "slack_installation:revoked"
+
+	// Gitea integration events. One connection per workspace (PAT-based, no
+	// installation concept), so `created` also covers reconnect/token
+	// refresh. `pull_request:updated`-equivalent is a distinct event name
+	// (not the GitHub one) so the frontend can invalidate Gitea-specific
+	// query keys without also refetching GitHub PR queries.
+	EventGiteaConnectionCreated  = "gitea_connection:created"
+	EventGiteaConnectionDeleted  = "gitea_connection:deleted"
+	EventGiteaPullRequestUpdated = "gitea_pull_request:updated"
 )

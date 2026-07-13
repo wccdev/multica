@@ -27,6 +27,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/integrations/channel"
 	"github.com/multica-ai/multica/server/internal/integrations/channel/engine"
 	composiointeg "github.com/multica-ai/multica/server/internal/integrations/composio"
+	"github.com/multica-ai/multica/server/internal/integrations/gitea"
 	"github.com/multica-ai/multica/server/internal/integrations/lark"
 	"github.com/multica-ai/multica/server/internal/integrations/slack"
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
@@ -510,6 +511,30 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		slog.Info("slack integration disabled (MULTICA_SLACK_SECRET_KEY not set)")
 	}
 
+	// Gitea integration: bring-your-own Personal/Bot Access Token, for teams
+	// running a private/self-hosted Gitea instance instead of GitHub. Fully
+	// independent of the GitHub App integration above — see
+	// server/internal/handler/gitea.go. Gated by MULTICA_GITEA_SECRET_KEY
+	// (decrypts the stored token) plus GITEA_BASE_URL (the single configured
+	// instance); GITEA_WEBHOOK_SECRET and MULTICA_PUBLIC_URL are also
+	// required before the connect/sync endpoints will actually work
+	// (isGiteaConfigured checks all four), but are not needed to construct
+	// the service itself.
+	giteaBaseURL := strings.TrimRight(strings.TrimSpace(os.Getenv("GITEA_BASE_URL")), "/")
+	if giteaKey, err := secretbox.LoadKey("MULTICA_GITEA_SECRET_KEY"); err == nil {
+		box, err := secretbox.New(giteaKey)
+		if err != nil {
+			slog.Error("gitea: secretbox.New failed; gitea integration disabled", "error", err)
+		} else if giteaBaseURL == "" {
+			slog.Info("gitea integration disabled (GITEA_BASE_URL not set)")
+		} else {
+			h.GiteaInstall = gitea.NewInstallService(queries, box, giteaBaseURL, nil)
+			slog.Info("gitea integration enabled", "base_url", giteaBaseURL)
+		}
+	} else {
+		slog.Info("gitea integration disabled (MULTICA_GITEA_SECRET_KEY not set)")
+	}
+
 	// Composio integration (MUL-3720). Gated by COMPOSIO_API_KEY plus the
 	// composio_mcp_apps feature flag. The env var is the project-scoped key the
 	// standalone SDK authenticates Composio with (sent as x-api-key; the project
@@ -697,6 +722,11 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	// HMAC-SHA256 signature in the handler) and post-install setup callback.
 	r.Post("/api/webhooks/github", h.HandleGitHubWebhook)
 	r.Get("/api/github/setup", h.GitHubSetupCallback)
+	// Gitea webhook (no Multica auth — requests are authenticated via
+	// HMAC-SHA256 signature in the handler). Unlike GitHub's
+	// installation-scoped payloads, a bare Gitea webhook carries no tenant
+	// identifier, so the workspace id is embedded in the URL itself.
+	r.Post("/api/webhooks/gitea/{workspaceId}", h.HandleGiteaWebhook)
 	// Slack OAuth callback (no Multica auth in the path — it is hit by Slack's
 	// browser redirect; the workspace/agent/initiator are recovered from the
 	// sealed state). It exchanges the code, upserts the install, then bounces
@@ -817,6 +847,9 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					// the handler strips the management handle and adds a
 					// can_manage hint so the UI can gate connect/disconnect.
 					r.Get("/github/installations", h.ListGitHubInstallations)
+					// Gitea connection is member-visible for the same reason as
+					// GitHub above; connect/disconnect/sync are admin-only, below.
+					r.Get("/gitea/connection", h.GetGiteaConnection)
 					// Custom runtime profiles — listing/reading is member-visible
 					// (the Runtime page renders for everyone; create/edit/delete
 					// are admin-gated below).
@@ -850,6 +883,17 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Use(middleware.RequireWorkspaceRoleFromURL(queries, "id", "owner", "admin"))
 					r.Get("/github/connect", h.GitHubConnect)
 					r.Delete("/github/installations/{installationId}", h.DeleteGitHubInstallation)
+				})
+
+				// Gitea integration (bring-your-own PAT, no OAuth flow — see
+				// server/internal/handler/gitea.go). Same admin/member split as
+				// GitHub: read-only connection state is member-visible above;
+				// connect / disconnect / repo-webhook sync are admin-only.
+				r.Group(func(r chi.Router) {
+					r.Use(middleware.RequireWorkspaceRoleFromURL(queries, "id", "owner", "admin"))
+					r.Post("/gitea/install", h.RegisterGiteaConnection)
+					r.Delete("/gitea/connection", h.DeleteGiteaConnection)
+					r.Post("/gitea/sync", h.SyncGiteaRepositories)
 				})
 
 				// Lark integration. Every endpoint here only requires
@@ -1019,6 +1063,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Put("/metadata/{key}", h.SetIssueMetadataKey)
 					r.Delete("/metadata/{key}", h.DeleteIssueMetadataKey)
 					r.Get("/pull-requests", h.ListPullRequestsForIssue)
+					r.Get("/gitea-pull-requests", h.ListIssueGiteaPullRequests)
 				})
 			})
 

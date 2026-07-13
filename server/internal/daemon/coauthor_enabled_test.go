@@ -11,11 +11,13 @@ import (
 )
 
 // workspaceCoAuthoredByEnabled gates the prepare-commit-msg hook installed in
-// agent worktrees. RFC MUL-2414 adds the `github_enabled` master switch:
-// when it is explicitly false the hook must NOT be installed even if
-// `co_authored_by_enabled` is true. The function also defaults to true
-// whenever settings are absent or malformed so existing workspaces keep
-// their historical behavior.
+// agent worktrees. The hook is shared by GitHub and Gitea (it's a plain git
+// hook with no host awareness), so it is only forced off by the provider
+// master switches when BOTH `github_enabled` and `gitea_enabled` are
+// explicitly false — a workspace that only ever touches one provider's
+// switch must not have the other provider's commits silently lose the
+// trailer. The function also defaults to true whenever settings are absent
+// or malformed so existing workspaces keep their historical behavior.
 func TestWorkspaceCoAuthoredByEnabled(t *testing.T) {
 	cases := []struct {
 		name       string
@@ -30,15 +32,27 @@ func TestWorkspaceCoAuthoredByEnabled(t *testing.T) {
 		{"co_authored_by true", true, `{"co_authored_by_enabled":true}`, true},
 		{"co_authored_by false", true, `{"co_authored_by_enabled":false}`, false},
 		{
-			"master off forces hook off even when co_authored_by true",
+			"github off alone does not force hook off (gitea unset defaults on)",
 			true,
 			`{"github_enabled":false,"co_authored_by_enabled":true}`,
+			true,
+		},
+		{
+			"gitea off alone does not force hook off (github unset defaults on)",
+			true,
+			`{"gitea_enabled":false,"co_authored_by_enabled":true}`,
+			true,
+		},
+		{
+			"both providers off forces hook off even when co_authored_by true",
+			true,
+			`{"github_enabled":false,"gitea_enabled":false,"co_authored_by_enabled":true}`,
 			false,
 		},
 		{
-			"master on lets co_authored_by decide",
+			"either provider on lets co_authored_by decide",
 			true,
-			`{"github_enabled":true,"co_authored_by_enabled":false}`,
+			`{"github_enabled":true,"gitea_enabled":false,"co_authored_by_enabled":false}`,
 			false,
 		},
 		{"malformed settings defaults on", true, `not json`, true},
@@ -116,8 +130,10 @@ func TestSyncWorkspacesRefreshesSettingsOnExistingWorkspace(t *testing.T) {
 		t.Fatalf("precondition: expected co-author hook to start enabled")
 	}
 
-	// The user opens Settings → GitHub and turns the master switch off.
-	settingsPayload.Store(json.RawMessage(`{"github_enabled":false,"co_authored_by_enabled":true}`))
+	// The user opens Settings → GitHub and Settings → Gitea and turns BOTH
+	// master switches off (turning off only one no longer disables the
+	// shared hook — see workspaceCoAuthoredByEnabled).
+	settingsPayload.Store(json.RawMessage(`{"github_enabled":false,"gitea_enabled":false,"co_authored_by_enabled":true}`))
 
 	if err := d.syncWorkspacesFromAPI(context.Background()); err != nil {
 		t.Fatalf("syncWorkspacesFromAPI: %v", err)
@@ -129,7 +145,7 @@ func TestSyncWorkspacesRefreshesSettingsOnExistingWorkspace(t *testing.T) {
 
 	// Flipping the master switch back on must take effect the next sync too —
 	// the refresh path is not one-way.
-	settingsPayload.Store(json.RawMessage(`{"github_enabled":true,"co_authored_by_enabled":true}`))
+	settingsPayload.Store(json.RawMessage(`{"github_enabled":true,"gitea_enabled":false,"co_authored_by_enabled":true}`))
 	if err := d.syncWorkspacesFromAPI(context.Background()); err != nil {
 		t.Fatalf("syncWorkspacesFromAPI (re-enable): %v", err)
 	}

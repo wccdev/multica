@@ -22,6 +22,7 @@ import {
   agentTasksKeys,
 } from "../agents/queries";
 import { githubKeys } from "../github/queries";
+import { giteaKeys } from "../gitea/queries";
 import { larkKeys } from "../lark/queries";
 import { slackKeys } from "../slack/queries";
 import {
@@ -531,6 +532,14 @@ export function useRealtimeSync(
         // PR list is keyed by issue id, not workspace, so we invalidate all
         // PR queries — the open issue detail page will refetch its own list.
         qc.invalidateQueries({ queryKey: ["github", "pull-requests"] });
+      },
+      gitea_connection: () => {
+        const wsId = getCurrentWsId();
+        if (wsId) qc.invalidateQueries({ queryKey: giteaKeys.connection(wsId) });
+      },
+      gitea_pull_request: () => {
+        // Same rationale as pull_request above: keyed by issue id, not workspace.
+        qc.invalidateQueries({ queryKey: ["gitea", "pull-requests"] });
       },
       // Powers the agent presence cache: any task lifecycle change
       // (dispatch / completed / failed / cancelled) refreshes the

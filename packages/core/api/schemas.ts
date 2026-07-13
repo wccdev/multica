@@ -15,6 +15,10 @@ import type {
   CreateAgentFromTemplateResponse,
   CreateBillingCheckoutSessionResponse,
   CreateBillingPortalSessionResponse,
+  GetGiteaConnectionResponse,
+  GiteaConnection,
+  GiteaPullRequest,
+  GiteaSyncResponse,
   GroupedIssuesResponse,
   InboxWorkspaceUnread,
   Label,
@@ -1246,4 +1250,71 @@ export const CreateBillingPortalSessionResponseSchema = z.object({
 
 export const EMPTY_CREATE_BILLING_PORTAL_SESSION_RESPONSE: CreateBillingPortalSessionResponse = {
   url: "",
+};
+
+export const GiteaConnectionSchema = z.object({
+  id: z.string(),
+  workspace_id: z.string(),
+  account_login: z.string(),
+  account_avatar_url: z.string().nullable(),
+  connected_by_id: z.string().optional(),
+  created_at: z.string(),
+}).loose();
+
+export const GetGiteaConnectionResponseSchema = z.object({
+  connection: GiteaConnectionSchema.nullable(),
+  configured: z.boolean().default(false),
+  can_manage: z.boolean().default(false),
+  base_url: z.string().default(""),
+}).loose();
+
+export const EMPTY_GITEA_CONNECTION_RESPONSE: GetGiteaConnectionResponse = {
+  connection: null,
+  configured: false,
+  can_manage: false,
+  base_url: "",
+};
+
+export const RegisterGiteaConnectionResponseSchema = z.object({
+  connection: GiteaConnectionSchema.nullable(),
+}).loose();
+
+export const EMPTY_REGISTER_GITEA_CONNECTION_RESPONSE: { connection: GiteaConnection | null } = {
+  connection: null,
+};
+
+export const GiteaPullRequestSchema = z.object({
+  id: z.string(),
+  workspace_id: z.string(),
+  repo_owner: z.string(),
+  repo_name: z.string(),
+  number: z.number(),
+  title: z.string(),
+  state: z.string(),
+  html_url: z.string(),
+  branch: z.string().nullable(),
+  author_login: z.string().nullable(),
+  author_avatar_url: z.string().nullable(),
+  merged_at: z.string().nullable(),
+  closed_at: z.string().nullable(),
+  pr_created_at: z.string(),
+  pr_updated_at: z.string(),
+}).loose();
+
+export const ListIssueGiteaPullRequestsResponseSchema = z.object({
+  pull_requests: z.array(GiteaPullRequestSchema).default([]),
+}).loose();
+
+export const EMPTY_ISSUE_GITEA_PULL_REQUESTS: { pull_requests: GiteaPullRequest[] } = {
+  pull_requests: [],
+};
+
+export const GiteaSyncResponseSchema = z.object({
+  created: z.number().default(0),
+  removed: z.number().default(0),
+}).loose();
+
+export const EMPTY_GITEA_SYNC_RESPONSE: GiteaSyncResponse = {
+  created: 0,
+  removed: 0,
 };

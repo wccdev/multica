@@ -79,7 +79,10 @@ export type WSEventType =
   | "github_installation:deleted"
   | "pull_request:linked"
   | "pull_request:updated"
-  | "pull_request:unlinked";
+  | "pull_request:unlinked"
+  | "gitea_connection:created"
+  | "gitea_connection:deleted"
+  | "gitea_pull_request:updated";
 
 export interface WSMessage<T = unknown> {
   type: WSEventType;
@@ -483,6 +486,9 @@ export interface WSEventPayloadMap {
   "pull_request:linked": unknown;
   "pull_request:updated": unknown;
   "pull_request:unlinked": unknown;
+  "gitea_connection:created": unknown;
+  "gitea_connection:deleted": unknown;
+  "gitea_pull_request:updated": unknown;
 }
 
 /**

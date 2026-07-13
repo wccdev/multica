@@ -1,0 +1,142 @@
+---
+title: Gitea integration
+description: Connect a self-hosted Gitea instance with a Personal Access Token, then PRs whose branch, title, or body reference an issue identifier auto-attach to that issue — and merging the PR moves the issue to Done.
+---
+
+import { Callout } from "fumadocs-ui/components/callout";
+
+Connect a private/self-hosted Gitea instance once in **Settings → Gitea** by pasting a Personal or Bot Access Token. After that, any pull request whose branch name, title, or body contains an issue identifier (for example `MUL-123`) is **auto-linked** to that [issue](/issues), appears under **Pull requests (Gitea)** in the issue sidebar, and — when the PR is merged — moves the issue to **Done**.
+
+This mirrors the [GitHub integration](/github-integration) closely, but the connection model is different: Gitea has no App-marketplace "installation" concept, so Multica uses a workspace-admin-pasted Access Token instead, and registers repo webhooks itself via the Gitea API rather than relying on GitHub's install-time repo grant.
+
+<Callout type="info">
+If your team uses GitHub instead, see the [GitHub integration](/github-integration) doc — the two integrations are fully independent and can both be connected in the same workspace if needed.
+</Callout>
+
+## What the integration does
+
+| Surface | Behavior |
+|---|---|
+| **Settings → Gitea** | Workspace admins see the Gitea tab with a master toggle, **Connect Gitea** dialog (paste an Access Token), a **Sync repositories** action, and the auto-link feature switch. |
+| **Issue sidebar → Pull requests (Gitea)** | Every PR auto-linked to this issue, with title, repo, state (`Open` / `Draft` / `Merged` / `Closed`), and author. Click a row to jump to the PR on Gitea. |
+| **Webhook (background)** | On every `pull_request` event, Multica upserts the PR row, scans the PR for issue identifiers, and (re)builds the link rows. Idempotent — replaying a delivery is a no-op. |
+| **Auto-status on merge** | When a PR transitions to `merged`, every linked issue not already `Done` or `Cancelled` is moved to `Done`. The status change is timeline-logged with source `gitea_pr_merged`. |
+
+Only the PR itself is mirrored. Commits, branch refs without an open PR, and CI check states are **not** modeled in this integration (Gitea's CI sources vary — Actions, Drone, Jenkins — with no unified webhook shape).
+
+## Repository scope
+
+Gitea has no per-installation repo grant like GitHub Apps do, so Multica reuses the workspace's existing **Repositories** list (Settings → Repositories — the same list the agent daemon clones from) as the source of truth for which repos to subscribe to:
+
+- Any repo URL in that list whose host matches your configured `GITEA_BASE_URL` is a sync candidate.
+- **Sync repositories** (on the Gitea tab, or automatically once right after connecting) registers a webhook on every matching repo that doesn't have one yet, and removes webhooks for repos no longer in the list.
+- Re-run **Sync repositories** any time you add or remove a repo from the Repositories list — it does not happen automatically on every edit.
+
+## How identifiers are matched
+
+Identical matching rules to the GitHub integration: the webhook extracts identifiers from **PR head branch**, **PR title**, and **PR body**, case-insensitively, scoped to the workspace's own [issue prefix](/workspaces), and deduplicated. You can reference multiple issues in one PR — `Closes MUL-1, MUL-2` links both, and merging advances both to `Done`.
+
+## The auto-merge-to-Done rule
+
+When a PR's `merged` field flips to `true`, every linked issue is evaluated:
+
+| Issue current status | Result |
+|---|---|
+| `done` | No change (already terminal). |
+| `cancelled` | **No change** — cancelled means the user explicitly abandoned the work; the integration does not override that signal. |
+| Anything else (`todo`, `in_progress`, `in_review`, `blocked`, `backlog`) | Moved to `done`. |
+
+Closing a PR **without** merging it only updates the PR card's state to `Closed`. The linked issues stay where they were.
+
+## Disconnecting
+
+The Disconnect control on the Gitea tab is admin-only and removes every webhook Multica registered (best-effort — a repo that's unreachable at disconnect time just leaves an orphaned webhook on the Gitea side, harmless since Multica has already forgotten the secret) before deleting the connection. Mirrored PR rows stay in the database so historical issue sidebars still show what was linked.
+
+## Permissions and visibility
+
+- **Connect / disconnect / sync** require workspace **owner or admin**. Members see the connection card but no management controls.
+- The **Pull requests (Gitea)** sidebar on an issue is visible to anyone who can read the issue.
+- The Access Token you paste should be scoped to **read/write repository** access (read to see PRs, write to let Multica register webhooks) — a token with broader admin scope is not required.
+
+## Self-host setup
+
+Gitea support is self-host only — it targets a private Gitea instance you control, so there is nothing to configure on Multica Cloud.
+
+### 1. Generate a Personal or Bot Access Token
+
+In your Gitea instance: **Settings → Applications → Generate New Token**. Grant it `repo` (read/write) scope. A dedicated bot account (rather than a personal account) is recommended so the "connected by" identity and webhook ownership survive an individual leaving the team.
+
+### 2. Set environment variables
+
+On the API server:
+
+```dotenv
+GITEA_BASE_URL=https://gitea.internal.example.com
+GITEA_WEBHOOK_SECRET=<a long random string, e.g. `openssl rand -hex 32`>
+MULTICA_GITEA_SECRET_KEY=<base64 32-byte key, e.g. `openssl rand -base64 32`>
+```
+
+All three are required. If any is missing:
+
+- `Connect Gitea` in Settings is **disabled** and shows a "not configured" hint.
+- The `/api/webhooks/gitea/{workspaceId}` endpoint returns **`503 gitea webhooks not configured`** when `GITEA_WEBHOOK_SECRET` is unset — Multica refuses to process events with no secret, rather than silently treating every signature as valid.
+
+`MULTICA_PUBLIC_URL` must also be set — it's used to mint the absolute webhook URL Multica registers on each repo via the Gitea API.
+
+Restart the API after setting the env vars.
+
+### 3. Run migrations
+
+The integration ships its tables in migration `167_gitea_integration`. If you're upgrading an older deployment:
+
+```bash
+make migrate-up
+```
+
+Four tables get created: `gitea_connection`, `gitea_webhook`, `gitea_pull_request`, `issue_gitea_pull_request`. They cascade-delete with their workspace.
+
+### 4. Connect from the UI
+
+1. Open **Settings → Gitea** as an owner or admin.
+2. Click **Connect Gitea** and paste the Access Token from step 1.
+3. Add the repo(s) you want synced under **Settings → Repositories** (if not already there).
+4. Click **Sync repositories** — Multica registers a webhook on each matching repo via the Gitea API.
+
+After that, open any PR whose branch / title / body contains an issue identifier — within a few seconds the **Pull requests (Gitea)** block appears on that issue's detail page.
+
+### 5. Verify with a curl probe
+
+If a webhook delivery in Gitea's repo settings reports a failure, the fastest way to isolate which side is wrong is to bypass Gitea. Note Gitea's `X-Gitea-Signature` header is a **raw hex HMAC-SHA256**, unlike GitHub's `sha256=`-prefixed `X-Hub-Signature-256`:
+
+```bash
+SECRET="<the value you put in GITEA_WEBHOOK_SECRET>"
+WORKSPACE_ID="<the workspace's UUID>"
+BODY='{}'
+SIG=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$SECRET" -hex | awk '{print $NF}')
+curl -i -X POST "https://<api-host>/api/webhooks/gitea/$WORKSPACE_ID" \
+  -H "X-Gitea-Signature: $SIG" \
+  -H "X-Gitea-Event: ping" \
+  -H "Content-Type: application/json" \
+  -d "$BODY"
+```
+
+| HTTP status | Meaning | Fix |
+|---|---|---|
+| `200` `{"ok":"pong"}` | Server's loaded secret matches your `$SECRET`. The mismatch is on the Gitea side. | Edit the repo's webhook → **Secret** → paste the same value → **Update Webhook**. |
+| `401 invalid signature` | Server's loaded secret is **not** what you think it is. | Confirm the env var landed in the running process. Re-deploy. |
+| `503 gitea webhooks not configured` | `GITEA_WEBHOOK_SECRET` is empty in the process. | Set the env var, restart the API. |
+| `400 workspace id` | The workspace UUID in the URL is malformed. | Double-check the UUID; the webhook URL Multica registers is always `.../api/webhooks/gitea/<uuid>`. |
+
+## Limitations
+
+- **No manual link UI yet** — the only way to link a PR is to have the identifier in its branch, title, or body.
+- **No CI / check state** — only the PR itself is mirrored.
+- **Repository scope requires an explicit sync** — unlike GitHub's install-time repo grant, adding a repo to the workspace's Repositories list does not auto-register a webhook; click **Sync repositories** afterward.
+- **Single Gitea instance per deployment** — `GITEA_BASE_URL` is one env var for the whole Multica deployment, not per-workspace. Every workspace that connects Gitea connects to the same instance (with its own token).
+
+## Next
+
+- [Issues](/issues) — the issue identifiers (`MUL-123`) referenced from PRs
+- [Workspaces](/workspaces) — where the workspace-specific issue prefix is set
+- [Environment variables](/environment-variables) — full env reference, including the Gitea variables above
+- [GitHub integration](/github-integration) — the equivalent flow for GitHub

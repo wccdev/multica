@@ -23,6 +23,10 @@ import {
   SquadSchema,
   TimelineEntriesSchema,
   UserSchema,
+  GetGiteaConnectionResponseSchema,
+  EMPTY_GITEA_CONNECTION_RESPONSE,
+  ListIssueGiteaPullRequestsResponseSchema,
+  EMPTY_ISSUE_GITEA_PULL_REQUESTS,
 } from "./schemas";
 import { parseWithFallback } from "./schema";
 
@@ -627,5 +631,104 @@ describe("SearchProjectsResponseSchema date drift", () => {
     expect(parsed.projects).toHaveLength(1);
     expect(parsed.projects[0]?.start_date).toBeNull();
     expect(parsed.projects[0]?.due_date).toBeNull();
+  });
+});
+
+describe("GetGiteaConnectionResponseSchema", () => {
+  const ENDPOINT = { endpoint: "GET /api/workspaces/:id/gitea/connection" };
+
+  it("parses a connected workspace response", () => {
+    const parsed = parseWithFallback(
+      {
+        connection: {
+          id: "conn-1",
+          workspace_id: "ws-1",
+          account_login: "octocat",
+          account_avatar_url: null,
+          created_at: "2026-01-01T00:00:00Z",
+        },
+        configured: true,
+        can_manage: true,
+        base_url: "https://gitea.internal.example.com",
+      },
+      GetGiteaConnectionResponseSchema,
+      EMPTY_GITEA_CONNECTION_RESPONSE,
+      ENDPOINT,
+    );
+    expect(parsed.connection?.account_login).toBe("octocat");
+    expect(parsed.configured).toBe(true);
+  });
+
+  it("parses a not-yet-connected workspace response", () => {
+    const parsed = parseWithFallback(
+      { connection: null, configured: true, can_manage: false, base_url: "" },
+      GetGiteaConnectionResponseSchema,
+      EMPTY_GITEA_CONNECTION_RESPONSE,
+      ENDPOINT,
+    );
+    expect(parsed.connection).toBeNull();
+    expect(parsed.can_manage).toBe(false);
+  });
+
+  it("falls back to the empty response on a malformed payload instead of throwing", () => {
+    const parsed = parseWithFallback("not an object", GetGiteaConnectionResponseSchema, EMPTY_GITEA_CONNECTION_RESPONSE, ENDPOINT);
+    expect(parsed).toBe(EMPTY_GITEA_CONNECTION_RESPONSE);
+  });
+
+  it("defaults configured/can_manage/base_url when an older backend omits them", () => {
+    const parsed = parseWithFallback(
+      { connection: null },
+      GetGiteaConnectionResponseSchema,
+      EMPTY_GITEA_CONNECTION_RESPONSE,
+      ENDPOINT,
+    );
+    expect(parsed.configured).toBe(false);
+    expect(parsed.can_manage).toBe(false);
+    expect(parsed.base_url).toBe("");
+  });
+});
+
+describe("ListIssueGiteaPullRequestsResponseSchema", () => {
+  const ENDPOINT = { endpoint: "GET /api/issues/:id/gitea-pull-requests" };
+
+  it("parses a list of pull requests", () => {
+    const parsed = parseWithFallback(
+      {
+        pull_requests: [
+          {
+            id: "pr-1",
+            workspace_id: "ws-1",
+            repo_owner: "acme",
+            repo_name: "widget",
+            number: 42,
+            title: "Fix login",
+            state: "open",
+            html_url: "https://gitea.internal.example.com/acme/widget/pulls/42",
+            branch: "fix/login",
+            author_login: "octocat",
+            author_avatar_url: null,
+            merged_at: null,
+            closed_at: null,
+            pr_created_at: "2026-01-01T00:00:00Z",
+            pr_updated_at: "2026-01-02T00:00:00Z",
+          },
+        ],
+      },
+      ListIssueGiteaPullRequestsResponseSchema,
+      EMPTY_ISSUE_GITEA_PULL_REQUESTS,
+      ENDPOINT,
+    );
+    expect(parsed.pull_requests).toHaveLength(1);
+    expect(parsed.pull_requests[0]?.repo_name).toBe("widget");
+  });
+
+  it("falls back to an empty list on a malformed payload instead of throwing", () => {
+    const parsed = parseWithFallback(null, ListIssueGiteaPullRequestsResponseSchema, EMPTY_ISSUE_GITEA_PULL_REQUESTS, ENDPOINT);
+    expect(parsed).toBe(EMPTY_ISSUE_GITEA_PULL_REQUESTS);
+  });
+
+  it("defaults missing pull_requests to an empty array", () => {
+    const parsed = parseWithFallback({}, ListIssueGiteaPullRequestsResponseSchema, EMPTY_ISSUE_GITEA_PULL_REQUESTS, ENDPOINT);
+    expect(parsed.pull_requests).toEqual([]);
   });
 });
