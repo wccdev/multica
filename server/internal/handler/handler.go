@@ -21,7 +21,6 @@ import (
 	"github.com/multica-ai/multica/server/internal/cloudruntime"
 	"github.com/multica-ai/multica/server/internal/daemonws"
 	"github.com/multica-ai/multica/server/internal/events"
-	"github.com/multica-ai/multica/server/internal/featureflagdispatch"
 	"github.com/multica-ai/multica/server/internal/integrations/channel/engine"
 	composio "github.com/multica-ai/multica/server/internal/integrations/composio"
 	"github.com/multica-ai/multica/server/internal/integrations/lark"
@@ -97,9 +96,11 @@ type Config struct {
 	// can frame API-hosted PDFs without allowing arbitrary third-party frames.
 	AttachmentFrameAncestors []string
 	// LLM* configure the basic LLM API layer (MUL-4238). They back the
-	// OpenAI-compatible chat-completions endpoints and any internal one-shot
-	// LLM helpers. When both LLMAPIKey and LLMBaseURL are empty the layer is
-	// disabled and the endpoints return 503.
+	// server-internal LLM helpers in pkg/llm (e.g. chat title generation).
+	// The generic OpenAI-compatible passthrough endpoints were removed in
+	// MUL-4309; LLM access is internal-only now. When both LLMAPIKey and
+	// LLMBaseURL are empty the layer is disabled and callers fall back
+	// silently (see maybeGenerateChatTitleAsync).
 	//   - LLMAPIKey       -> MULTICA_LLM_API_KEY
 	//   - LLMBaseURL       -> MULTICA_LLM_BASE_URL (OpenAI or any compatible gateway)
 	//   - LLMDefaultModel  -> MULTICA_LLM_DEFAULT_MODEL (used when a request omits `model`)
@@ -134,7 +135,6 @@ type Handler struct {
 	LocalSkillListStore   LocalSkillListStore
 	LocalSkillImportStore LocalSkillImportStore
 	FeatureFlags          *featureflag.Service
-	DaemonFeatureFlags    *featureflagdispatch.Evaluator
 	LivenessStore         LivenessStore
 	HeartbeatScheduler    HeartbeatScheduler
 	Storage               storage.Storage
@@ -210,10 +210,11 @@ type Handler struct {
 	// integration". A future platform satisfies the same reader interface.
 	SlackHistory ChatChannelHistoryReader
 	// LLM is the basic LLM API layer (MUL-4238): a thin wrapper over the
-	// OpenAI Go SDK backing the OpenAI-compatible chat-completions endpoints
-	// and any internal one-shot LLM helpers. Always non-nil (New builds it
-	// from Config); when unconfigured its Enabled() reports false and the
-	// handlers return 503.
+	// OpenAI Go SDK backing server-internal one-shot LLM helpers such as chat
+	// title generation. The generic passthrough endpoints were removed in
+	// MUL-4309, so it is internal-only now. Always non-nil (New builds it from
+	// Config); when unconfigured its Enabled() reports false and callers fall
+	// back silently.
 	LLM *llm.Client
 	cfg Config
 }
@@ -364,6 +365,18 @@ func uuidsToStrings(us []pgtype.UUID) []string {
 	}
 	if len(out) == 0 {
 		return nil
+	}
+	return out
+}
+
+// uuidStringsOrEmpty preserves the distinction between a modern, authoritative
+// empty UUID-array value (`[]`) and a field omitted by a legacy server. Delivery
+// receipts use this so clients never mistake zero delivered comments for an
+// unknown receipt and fall back to the enqueue-time plan.
+func uuidStringsOrEmpty(us []pgtype.UUID) []string {
+	out := uuidsToStrings(us)
+	if out == nil {
+		return []string{}
 	}
 	return out
 }
@@ -793,6 +806,10 @@ func (h *Handler) loadAgentForUser(w http.ResponseWriter, r *http.Request, agent
 		WorkspaceID: wsUUID,
 	})
 	if err != nil {
+		writeError(w, http.StatusNotFound, "agent not found")
+		return db.Agent{}, false
+	}
+	if agent.Kind != "user" {
 		writeError(w, http.StatusNotFound, "agent not found")
 		return db.Agent{}, false
 	}

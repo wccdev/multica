@@ -220,6 +220,14 @@ export function ChatWindow() {
   const handleRestoreDraftConsumed = useCallback(() => {
     setRestoreDraftRequest(null);
   }, []);
+  // Nonce handed to ChatInput to pull focus into the compose box when a new
+  // chat starts (⊕ or switching agent). 0 is inert so opening the window on an
+  // existing session never steals focus.
+  const [focusRequest, setFocusRequest] = useState(0);
+  const requestInputFocus = useCallback(
+    () => setFocusRequest((n) => n + 1),
+    [],
+  );
 
   // Legacy archived sessions (the old soft-archive feature was removed but
   // pre-existing rows with status='archived' may still exist) are excluded
@@ -663,8 +671,9 @@ export function ChatWindow() {
       setSelectedAgentId(agent.id);
       // Reset session when switching agent
       setActiveSession(null);
+      requestInputFocus();
     },
-    [activeAgent, selectedAgentId, activeSessionId, setSelectedAgentId, setActiveSession],
+    [activeAgent, selectedAgentId, activeSessionId, setSelectedAgentId, setActiveSession, requestInputFocus],
   );
 
   const handleNewChat = useCallback(() => {
@@ -673,7 +682,8 @@ export function ChatWindow() {
       previousPendingTask: pendingTaskId,
     });
     setActiveSession(null);
-  }, [activeSessionId, pendingTaskId, setActiveSession]);
+    requestInputFocus();
+  }, [activeSessionId, pendingTaskId, setActiveSession, requestInputFocus]);
 
   const handleSelectSession = useCallback(
     (session: ChatSession) => {
@@ -711,7 +721,7 @@ export function ChatWindow() {
 
   const isVisible = isOpen && (isExpanded || boundsReady);
 
-  const containerClass = "absolute bottom-2 right-2 z-50 flex flex-col rounded-xl ring-1 ring-foreground/10 bg-sidebar shadow-2xl overflow-hidden";
+  const containerClass = "absolute bottom-2 right-2 z-50 flex flex-col overflow-hidden rounded-xl bg-surface-raised shadow-[var(--floating-shadow)] ring-1 ring-surface-border";
   const containerStyle: React.CSSProperties = {
     transformOrigin: "bottom right",
     pointerEvents: isOpen ? "auto" : "none",
@@ -864,6 +874,7 @@ export function ChatWindow() {
           />
         }
         contextItems={contextItems}
+        focusRequest={focusRequest}
       />
     </motion.div>
   );
@@ -936,7 +947,7 @@ export function AgentDropdown({
           <ActorAvatar
             actorType="agent"
             actorId={activeAgent.id}
-            size={24}
+            size="md"
             enableHoverCard
             showStatusDot
           />
@@ -996,7 +1007,7 @@ function AgentPickerItem({
       <ActorAvatar
         actorType="agent"
         actorId={agent.id}
-        size={24}
+        size="md"
         enableHoverCard
         showStatusDot
       />
@@ -1243,7 +1254,7 @@ function SessionDropdown({
           <ActorAvatar
             actorType="agent"
             actorId={agent.id}
-            size={24}
+            size="md"
             enableHoverCard
             showStatusDot
           />
@@ -1401,7 +1412,7 @@ function SessionDropdown({
               <ActorAvatar
                 actorType="agent"
                 actorId={triggerAgent.id}
-                size={24}
+                size="md"
                 enableHoverCard
                 showStatusDot
               />

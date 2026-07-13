@@ -203,8 +203,12 @@ export function useChatController(opts?: { isActive?: boolean }) {
   const setActiveSession = useChatStore((s) => s.setActiveSession);
   const setSelectedAgentId = useChatStore((s) => s.setSelectedAgentId);
   const user = useAuthStore((s) => s.user);
-  const { data: agents = [] } = useQuery(agentListOptions(wsId));
-  const { data: members = [] } = useQuery(memberListOptions(wsId));
+  const { data: agents = [], isSuccess: agentsLoaded } = useQuery(
+    agentListOptions(wsId),
+  );
+  const { data: members = [], isSuccess: membersLoaded } = useQuery(
+    memberListOptions(wsId),
+  );
   const { data: sessions = [], isSuccess: sessionsLoaded } = useQuery(
     chatSessionsOptions(wsId),
   );
@@ -241,6 +245,14 @@ export function useChatController(opts?: { isActive?: boolean }) {
   const handleRestoreDraftConsumed = useCallback(() => {
     setRestoreDraftRequest(null);
   }, []);
+  // Nonce handed to ChatInput to pull focus into the compose box when a new
+  // chat starts. Bumped by handleNewChat / handleStartNewChat only, so
+  // selecting an existing chat or a deep link never steals focus.
+  const [focusInputRequest, setFocusInputRequest] = useState(0);
+  const requestInputFocus = useCallback(
+    () => setFocusInputRequest((n) => n + 1),
+    [],
+  );
 
   const currentSession = activeSessionId
     ? sessions.find((s) => s.id === activeSessionId)
@@ -257,6 +269,13 @@ export function useChatController(opts?: { isActive?: boolean }) {
   const availableAgents = agents.filter(
     (a) => !a.archived_at && canAssignAgent(a, user?.id, memberRole),
   );
+  // `availableAgents` is only trustworthy once BOTH queries above succeeded:
+  // the permission filter reads the member role, so agents-without-members
+  // misreports a public_to agent as unavailable. Consumers that must tell
+  // "still loading" apart from "settled and not available" (the `?agent=`
+  // deep link) gate on this instead of sniffing list emptiness. Query errors
+  // deliberately keep this false — a failed fetch is not a permission verdict.
+  const agentsSettled = agentsLoaded && membersLoaded;
 
   // The agent bound to the OPEN session, resolved from the full agent list
   // (archived included, since agentListOptions passes include_archived). An
@@ -575,7 +594,8 @@ export function useChatController(opts?: { isActive?: boolean }) {
       previousPendingTask: pendingTaskId,
     });
     setActiveSession(null);
-  }, [activeSessionId, pendingTaskId, setActiveSession]);
+    requestInputFocus();
+  }, [activeSessionId, pendingTaskId, setActiveSession, requestInputFocus]);
 
   // Start a fresh chat bound to a chosen agent. Unlike handleSelectAgent this
   // does not no-op when the agent is unchanged — "new chat" always clears the
@@ -589,8 +609,9 @@ export function useChatController(opts?: { isActive?: boolean }) {
       });
       setSelectedAgentId(agent.id);
       setActiveSession(null);
+      requestInputFocus();
     },
-    [activeSessionId, setSelectedAgentId, setActiveSession],
+    [activeSessionId, setSelectedAgentId, setActiveSession, requestInputFocus],
   );
 
   const handleSelectSession = useCallback(
@@ -645,6 +666,7 @@ export function useChatController(opts?: { isActive?: boolean }) {
     user,
     agents,
     availableAgents,
+    agentsSettled,
     sessions,
     activeSessionId,
     selectedAgentId,
@@ -667,6 +689,8 @@ export function useChatController(opts?: { isActive?: boolean }) {
     // draft restore
     restoreDraftRequest,
     handleRestoreDraftConsumed,
+    // compose-box focus nonce (bumped on new chat)
+    focusInputRequest,
     // actions
     handleSend,
     handleStop,
