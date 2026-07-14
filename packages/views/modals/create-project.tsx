@@ -2,25 +2,6 @@
 
 import { useState, useRef } from "react";
 import { CalendarClock, CalendarDays, ChevronRight, FolderOpen, Maximize2, Minimize2, MoreHorizontal, Search, X as XIcon, UserMinus } from "lucide-react";
-
-/**
- * GitHub mark — lucide-react v1 dropped brand icons, so we inline the
- * Octicon-style mark here (24×24 viewBox, currentColor fill so it inherits
- * the parent's text color). Stays in this file because there's only one
- * caller; promote to packages/ui if a second use crops up.
- */
-function GithubIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="currentColor"
-      aria-hidden="true"
-      className={className}
-    >
-      <path d="M12 .5C5.73.5.66 5.57.66 11.84c0 5.01 3.25 9.26 7.76 10.76.57.1.78-.25.78-.55 0-.27-.01-1.17-.02-2.13-3.16.69-3.83-1.34-3.83-1.34-.52-1.31-1.27-1.66-1.27-1.66-1.04-.71.08-.7.08-.7 1.15.08 1.76 1.18 1.76 1.18 1.02 1.75 2.68 1.24 3.34.95.1-.74.4-1.24.72-1.53-2.52-.29-5.18-1.26-5.18-5.62 0-1.24.45-2.26 1.18-3.06-.12-.29-.51-1.45.11-3.02 0 0 .96-.31 3.15 1.17a10.93 10.93 0 0 1 5.74 0c2.19-1.48 3.15-1.17 3.15-1.17.62 1.57.23 2.73.11 3.02.74.8 1.18 1.82 1.18 3.06 0 4.37-2.67 5.32-5.21 5.61.41.35.78 1.04.78 2.1 0 1.52-.01 2.74-.01 3.11 0 .3.21.66.79.55 4.51-1.5 7.76-5.75 7.76-10.76C23.34 5.57 18.27.5 12 .5Z" />
-    </svg>
-  );
-}
 import { useQuery } from "@tanstack/react-query";
 import { useCreateProject } from "@multica/core/projects/mutations";
 import { useProjectDraftStore } from "@multica/core/projects";
@@ -33,7 +14,8 @@ import { useWorkspaceId } from "@multica/core/hooks";
 import { useCurrentWorkspace, useWorkspacePaths } from "@multica/core/paths";
 import { memberListOptions, agentListOptions } from "@multica/core/workspace/queries";
 import { useActorName } from "@multica/core/workspace/hooks";
-import type { ProjectStatus, ProjectPriority } from "@multica/core/types";
+import { giteaConnectionOptions, giteaHostMatches } from "@multica/core/gitea";
+import type { ProjectStatus, ProjectPriority, ProjectResourceType } from "@multica/core/types";
 import { cn } from "@multica/ui/lib/utils";
 import { toast } from "sonner";
 import { Dialog, DialogContent, DialogTitle } from "@multica/ui/components/ui/dialog";
@@ -50,6 +32,9 @@ import { EmojiPicker } from "@multica/ui/components/common/emoji-picker";
 import { ContentEditor, type ContentEditorRef, TitleEditor } from "../editor";
 import { PriorityIcon } from "../issues/components/priority-icon";
 import { ActorAvatar } from "../common/actor-avatar";
+import { RepoProviderIcon, repoProviderResourceType } from "../common/repo-provider-icon";
+import { GiteaMark } from "../settings/components/gitea-mark";
+import { GitHubMark } from "../settings/components/github-mark";
 import { useNavigation } from "../navigation";
 import { useT } from "../i18n";
 import { matchesPinyin } from "../editor/extensions/pinyin-match";
@@ -102,6 +87,16 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
   const wsId = useWorkspaceId();
   const { data: members = [] } = useQuery(memberListOptions(wsId));
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
+  // Determines whether a repo picked in this modal gets tagged github_repo
+  // or gitea_repo (and which brand icon it renders with) — see
+  // RepoProviderIcon and repoResourceType below.
+  const { data: giteaConnectionData } = useQuery({
+    ...giteaConnectionOptions(wsId),
+    enabled: !!wsId,
+  });
+  const giteaBaseUrl = giteaConnectionData?.connection ? giteaConnectionData.base_url : undefined;
+  const repoResourceType = (url: string): ProjectResourceType =>
+    repoProviderResourceType(url, giteaBaseUrl);
   const { getActorName } = useActorName();
   const projectStatusLabels = useProjectStatusLabels();
   const projectPriorityLabels = useProjectPriorityLabels();
@@ -126,9 +121,10 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
   const [iconPickerOpen, setIconPickerOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
-  // Repos selected to attach as github_repo resources after the project is
-  // created. Stored as URLs (not full ProjectResource rows) — they're not
-  // persisted until handleSubmit fires the createProjectResource calls.
+  // Repos selected to attach as github_repo/gitea_repo resources (per-URL,
+  // see repoResourceType) after the project is created. Stored as URLs (not
+  // full ProjectResource rows) — they're not persisted until handleSubmit
+  // fires the createProjectResource calls.
   const [selectedRepos, setSelectedRepos] = useState<string[]>([]);
   const [repoPopoverOpen, setRepoPopoverOpen] = useState(false);
   const [repoSearch, setRepoSearch] = useState("");
@@ -139,8 +135,9 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
     repo.url.toLowerCase().includes(repoQuery),
   );
 
-  // A project's source is binary: either a set of GitHub repos OR a local
-  // working directory — never both. Mode is the source of truth for what
+  // A project's source is binary: either a set of repos (GitHub or Gitea —
+  // see repoResourceType) OR a local working directory — never both. Mode
+  // is the source of truth for what
   // gets persisted on submit; switching mode does NOT clear the other
   // side's stash, so toggling back and forth restores the user's prior
   // selection. Only the mode-matching side is sent to the API. Local mode
@@ -224,11 +221,11 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
     // side is silently dropped, so repos picked then abandoned for local
     // mode don't leak into the project.
     let resources:
-      | Array<{ resource_type: "github_repo" | "local_directory"; resource_ref: Record<string, unknown> }>
+      | Array<{ resource_type: ProjectResourceType; resource_ref: Record<string, unknown> }>
       | undefined;
     if (sourceMode === "repos" && selectedRepos.length > 0) {
       resources = selectedRepos.map((url) => ({
-        resource_type: "github_repo" as const,
+        resource_type: repoResourceType(url),
         resource_ref: { url },
       }));
     } else if (
@@ -576,7 +573,11 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
                     </>
                   ) : (
                     <>
-                      <GithubIcon className="size-3" />
+                      {giteaBaseUrl && selectedRepos.every((url) => giteaHostMatches(url, giteaBaseUrl)) ? (
+                        <GiteaMark className="size-3" />
+                      ) : (
+                        <GitHubMark className="size-3" />
+                      )}
                       <span>
                         {selectedRepos.length === 0
                           ? t(($) => $.create_project.repos_pill)
@@ -663,7 +664,7 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
                                 readOnly
                                 className="size-3.5"
                               />
-                              <GithubIcon className="size-3.5" />
+                              <RepoProviderIcon url={repo.url} giteaBaseUrl={giteaBaseUrl} className="size-3.5" />
                               <RepoUrlText url={repo.url} />
                             </button>
                           );
@@ -709,7 +710,7 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
                           key={url}
                           className="flex items-center gap-2 text-xs"
                         >
-                          <GithubIcon className="size-3 text-muted-foreground" />
+                          <RepoProviderIcon url={url} giteaBaseUrl={giteaBaseUrl} className="size-3 text-muted-foreground" />
                           <RepoUrlText url={url} />
                           <button
                             type="button"

@@ -59,6 +59,11 @@ vi.mock("@multica/core/workspace/hooks", () => ({
   useActorName: () => ({ getActorName: vi.fn() }),
 }));
 
+vi.mock("@multica/core/gitea", () => ({
+  giteaConnectionOptions: () => ({ queryKey: ["gitea", "workspace-1", "connection"], queryFn: vi.fn() }),
+  giteaHostMatches: () => false,
+}));
+
 vi.mock("../navigation", () => ({
   useNavigation: () => ({ push: vi.fn() }),
 }));

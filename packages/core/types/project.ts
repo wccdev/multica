@@ -62,15 +62,25 @@ export interface ListProjectsResponse {
 //
 // Known types (UI must default-case unknown server-side additions):
 //   - github_repo: cloud-side git checkout, ref = { url, ref?, default_branch_hint? }
+//   - gitea_repo: same shape/semantics as github_repo, for a repo hosted on a
+//     connected Gitea instance. Kept as a distinct resource_type (not folded
+//     into github_repo) purely so the UI can render the correct provider icon
+//     and label — the server-side validation and daemon checkout behavior are
+//     identical (both are "clone this git URL").
 //   - local_directory: in-place agent execution on a specific daemon,
 //     ref = { local_path, daemon_id, label? }
-export type ProjectResourceType = "github_repo" | "local_directory";
+export type ProjectResourceType = "github_repo" | "gitea_repo" | "local_directory";
 
 export interface GithubRepoResourceRef {
   url: string;
   ref?: string;
   default_branch_hint?: string;
 }
+
+// Identical shape to GithubRepoResourceRef — see the ProjectResourceType
+// comment above for why this is a separate resource_type rather than a
+// shared ref shape with a provider field.
+export type GiteaRepoResourceRef = GithubRepoResourceRef;
 
 export interface LocalDirectoryResourceRef {
   local_path: string;
@@ -80,6 +90,7 @@ export interface LocalDirectoryResourceRef {
 
 export type ProjectResourceRef =
   | GithubRepoResourceRef
+  | GiteaRepoResourceRef
   | LocalDirectoryResourceRef
   | Record<string, unknown>;
 

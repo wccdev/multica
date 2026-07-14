@@ -74,6 +74,8 @@ func validateAndNormalizeResourceRef(resourceType string, ref json.RawMessage) (
 	switch resourceType {
 	case "github_repo":
 		return validateGithubRepoRef(ref)
+	case "gitea_repo":
+		return validateGiteaRepoRef(ref)
 	case "local_directory":
 		return validateLocalDirectoryRef(ref)
 	default:
@@ -98,6 +100,37 @@ func validateGithubRepoRef(ref json.RawMessage) (json.RawMessage, error) {
 	}
 	if !isValidGitRepoURL(payload.URL) {
 		return nil, errors.New("github_repo: url must be a valid http(s) or ssh git URL")
+	}
+	payload.DefaultBranchHint = strings.TrimSpace(payload.DefaultBranchHint)
+	payload.Ref = strings.TrimSpace(payload.Ref)
+	out, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// giteaRepoRef mirrors githubRepoRef exactly — a repo hosted on a connected
+// Gitea instance instead of GitHub. Kept as a distinct type (rather than
+// reusing githubRepoRef under a different resource_type) so the two provider
+// payloads can diverge independently later without a breaking change.
+type giteaRepoRef struct {
+	URL               string `json:"url"`
+	DefaultBranchHint string `json:"default_branch_hint,omitempty"`
+	Ref               string `json:"ref,omitempty"`
+}
+
+func validateGiteaRepoRef(ref json.RawMessage) (json.RawMessage, error) {
+	var payload giteaRepoRef
+	if err := json.Unmarshal(ref, &payload); err != nil {
+		return nil, fmt.Errorf("invalid gitea_repo payload: %w", err)
+	}
+	payload.URL = strings.TrimSpace(payload.URL)
+	if payload.URL == "" {
+		return nil, errors.New("gitea_repo: url is required")
+	}
+	if !isValidGitRepoURL(payload.URL) {
+		return nil, errors.New("gitea_repo: url must be a valid http(s) or ssh git URL")
 	}
 	payload.DefaultBranchHint = strings.TrimSpace(payload.DefaultBranchHint)
 	payload.Ref = strings.TrimSpace(payload.Ref)

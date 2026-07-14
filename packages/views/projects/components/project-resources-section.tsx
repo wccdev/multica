@@ -4,7 +4,6 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   ChevronRight,
-  FolderGit,
   FolderOpen,
   Pencil,
   Plus,
@@ -20,7 +19,9 @@ import {
 } from "@multica/core/projects";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useCurrentWorkspace } from "@multica/core/paths";
+import { giteaConnectionOptions } from "@multica/core/gitea";
 import type {
+  GiteaRepoResourceRef,
   GithubRepoResourceRef,
   LocalDirectoryResourceRef,
   ProjectResource,
@@ -43,6 +44,7 @@ import {
   validateLocalDirectory,
   type ValidateLocalDirectoryResult,
 } from "../../platform";
+import { RepoProviderIcon, repoProviderResourceType } from "../../common/repo-provider-icon";
 import { useT } from "../../i18n";
 
 // Project Resources sidebar section.
@@ -55,6 +57,21 @@ function isGithubRef(r: ProjectResource): r is ProjectResource & {
   resource_ref: GithubRepoResourceRef;
 } {
   return r.resource_type === "github_repo";
+}
+
+// gitea_repo mirrors github_repo's ref shape exactly (see the
+// ProjectResourceType comment in @multica/core/types) — only the
+// resource_type differs, driving RepoProviderIcon's provider choice.
+function isGiteaRef(r: ProjectResource): r is ProjectResource & {
+  resource_ref: GiteaRepoResourceRef;
+} {
+  return r.resource_type === "gitea_repo";
+}
+
+function isRepoRef(r: ProjectResource): r is ProjectResource & {
+  resource_ref: GithubRepoResourceRef | GiteaRepoResourceRef;
+} {
+  return isGithubRef(r) || isGiteaRef(r);
 }
 
 function isLocalDirectoryRef(r: ProjectResource): r is ProjectResource & {
@@ -79,6 +96,14 @@ export function ProjectResourcesSection({ projectId }: { projectId: string }) {
   const createResource = useCreateProjectResource(wsId, projectId);
   const updateResource = useUpdateProjectResource(wsId, projectId);
   const deleteResource = useDeleteProjectResource(wsId, projectId);
+  // Determines whether a repo attached here gets tagged github_repo or
+  // gitea_repo (and which brand icon it renders with) — see
+  // RepoProviderIcon / repoProviderResourceType.
+  const { data: giteaConnectionData } = useQuery({
+    ...giteaConnectionOptions(wsId),
+    enabled: !!wsId,
+  });
+  const giteaBaseUrl = giteaConnectionData?.connection ? giteaConnectionData.base_url : undefined;
 
   // Desktop-only entry points. We hide (not just disable) on web so users
   // there don't see an action they can never complete — the spec calls for
@@ -87,8 +112,11 @@ export function ProjectResourcesSection({ projectId }: { projectId: string }) {
   const desktopMode = isDesktopShell();
   const localDaemonId = daemonStatus.daemonId;
 
+  // Both github_repo and gitea_repo count toward "already attached" — a
+  // repo already attached under either type must not offer a duplicate
+  // attach button in the picker below.
   const attachedUrls = new Set(
-    resources.filter(isGithubRef).map((r) => r.resource_ref.url),
+    resources.filter(isRepoRef).map((r) => r.resource_ref.url),
   );
   const attachedLocalPaths = new Set(
     resources
@@ -113,7 +141,7 @@ export function ProjectResourcesSection({ projectId }: { projectId: string }) {
   const handleAttach = async (url: string) => {
     try {
       await createResource.mutateAsync({
-        resource_type: "github_repo",
+        resource_type: repoProviderResourceType(url, giteaBaseUrl),
         resource_ref: { url },
       });
       toast.success(t(($) => $.resources.toast_attached));
@@ -256,6 +284,7 @@ export function ProjectResourcesSection({ projectId }: { projectId: string }) {
                   resource={resource}
                   localDaemonId={localDaemonId}
                   canEdit={desktopMode}
+                  giteaBaseUrl={giteaBaseUrl}
                   onRemove={() => handleRemove(resource)}
                   onRenameLocalDirectory={handleRenameLocalDirectory}
                 />
@@ -322,7 +351,7 @@ export function ProjectResourcesSection({ projectId }: { projectId: string }) {
                           }}
                           className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-xs text-left hover:bg-accent transition-colors aria-disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:hover:bg-transparent"
                         >
-                          <FolderGit className="size-3.5" />
+                          <RepoProviderIcon url={repo.url} giteaBaseUrl={giteaBaseUrl} className="size-3.5" />
                           <Tooltip>
                             <TooltipTrigger
                               render={
@@ -391,6 +420,7 @@ interface ResourceRowProps {
   resource: ProjectResource;
   localDaemonId: string | null;
   canEdit: boolean;
+  giteaBaseUrl: string | undefined;
   onRemove: () => void;
   onRenameLocalDirectory: (
     resource: ProjectResource & { resource_ref: LocalDirectoryResourceRef },
@@ -402,17 +432,18 @@ function ResourceRow({
   resource,
   localDaemonId,
   canEdit,
+  giteaBaseUrl,
   onRemove,
   onRenameLocalDirectory,
 }: ResourceRowProps) {
   const { t } = useT("projects");
-  if (isGithubRef(resource)) {
+  if (isRepoRef(resource)) {
     const ref = resource.resource_ref;
     const display = resource.label || (ref.ref ? `${ref.url} @ ${ref.ref}` : ref.url);
     const tooltip = ref.ref ? `${ref.url}\nref: ${ref.ref}` : ref.url;
     return (
       <div className="flex items-center gap-2 text-xs group">
-        <FolderGit className="size-3.5 text-muted-foreground shrink-0" />
+        <RepoProviderIcon url={ref.url} giteaBaseUrl={giteaBaseUrl} className="size-3.5 shrink-0" />
         <Tooltip>
           <TooltipTrigger
             render={

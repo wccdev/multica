@@ -10,6 +10,35 @@ import (
 	"github.com/multica-ai/multica/server/internal/runtimeapps"
 )
 
+// formatProjectResource renders github_repo and gitea_repo with distinct
+// provider labels but otherwise identical formatting — both are "clone this
+// git URL" resources; only the label the agent sees should differ.
+func TestFormatProjectResourceProviderLabel(t *testing.T) {
+	cases := []struct {
+		resourceType string
+		wantPrefix   string
+	}{
+		{"github_repo", "**GitHub repo**: https://github.com/acme/widget"},
+		{"gitea_repo", "**Gitea repo**: https://gitea.internal.example.com/acme/widget"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.resourceType, func(t *testing.T) {
+			url := "https://github.com/acme/widget"
+			if tc.resourceType == "gitea_repo" {
+				url = "https://gitea.internal.example.com/acme/widget"
+			}
+			r := ProjectResourceForEnv{
+				ResourceType: tc.resourceType,
+				ResourceRef:  []byte(fmt.Sprintf(`{"url":%q}`, url)),
+			}
+			got := formatProjectResource(r)
+			if !strings.HasPrefix(got, tc.wantPrefix) {
+				t.Errorf("formatProjectResource(%s) = %q, want prefix %q", tc.resourceType, got, tc.wantPrefix)
+			}
+		})
+	}
+}
+
 // Sub-issue Creation section — after MUL-2538 the platform posts the
 // child-done parent notification itself, so the brief no longer carries
 // any parent-notification rule (per Bohan's call on PR #3055: delete the

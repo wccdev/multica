@@ -105,6 +105,7 @@ export type {
   ProjectResourceType,
   ProjectResourceRef,
   GithubRepoResourceRef,
+  GiteaRepoResourceRef,
   LocalDirectoryResourceRef,
   CreateProjectResourceRequest,
   UpdateProjectResourceRequest,

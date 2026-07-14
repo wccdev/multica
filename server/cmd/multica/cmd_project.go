@@ -145,27 +145,28 @@ func init() {
 	projectResourceListCmd.Flags().Bool("full-id", false, "Show full UUIDs in table output")
 
 	// project resource add — generic shape: any --type with a JSON --ref
-	// payload works without further CLI changes. github_repo is supported via
-	// dedicated shortcuts; for that type, a non-JSON --ref value is treated as
-	// the default checkout ref.
-	projectResourceAddCmd.Flags().String("type", "github_repo", "Resource type (e.g. github_repo, local_directory — see docs)")
-	projectResourceAddCmd.Flags().String("url", "", "Shortcut: the repo URL (only used when --type github_repo)")
-	projectResourceAddCmd.Flags().String("default-branch-hint", "", "Shortcut: optional default branch hint (only used when --type github_repo)")
+	// payload works without further CLI changes. github_repo and gitea_repo
+	// are supported via dedicated shortcuts (identical ref shape — only the
+	// resource_type differs, driving the UI's provider icon); for those
+	// types, a non-JSON --ref value is treated as the default checkout ref.
+	projectResourceAddCmd.Flags().String("type", "github_repo", "Resource type (e.g. github_repo, gitea_repo, local_directory — see docs)")
+	projectResourceAddCmd.Flags().String("url", "", "Shortcut: the repo URL (only used when --type github_repo or gitea_repo)")
+	projectResourceAddCmd.Flags().String("default-branch-hint", "", "Shortcut: optional default branch hint (only used when --type github_repo or gitea_repo)")
 	projectResourceAddCmd.Flags().String("local-path", "", "Shortcut: absolute path to the working directory (only used when --type local_directory)")
 	projectResourceAddCmd.Flags().String("daemon-id", "", "Shortcut: id of the daemon that owns the local path (only used when --type local_directory)")
 	projectResourceAddCmd.Flags().String("ref-label", "", "Shortcut: optional label embedded in resource_ref (only used when --type local_directory)")
-	projectResourceAddCmd.Flags().String("ref", "", "Generic JSON resource_ref payload, or a github_repo checkout ref when used with --url")
+	projectResourceAddCmd.Flags().String("ref", "", "Generic JSON resource_ref payload, or a github_repo/gitea_repo checkout ref when used with --url")
 	projectResourceAddCmd.Flags().String("label", "", "Optional human-readable label")
 	projectResourceAddCmd.Flags().String("output", "json", "Output format: table or json")
 
 	// project resource update — mirrors `add` flags, but every field is
 	// optional so the caller can edit one thing at a time.
-	projectResourceUpdateCmd.Flags().String("url", "", "Shortcut: new repo URL (github_repo)")
-	projectResourceUpdateCmd.Flags().String("default-branch-hint", "", "Shortcut: new default branch hint (github_repo)")
+	projectResourceUpdateCmd.Flags().String("url", "", "Shortcut: new repo URL (github_repo, gitea_repo)")
+	projectResourceUpdateCmd.Flags().String("default-branch-hint", "", "Shortcut: new default branch hint (github_repo, gitea_repo)")
 	projectResourceUpdateCmd.Flags().String("local-path", "", "Shortcut: new absolute local path (local_directory)")
 	projectResourceUpdateCmd.Flags().String("daemon-id", "", "Shortcut: new daemon id (local_directory)")
 	projectResourceUpdateCmd.Flags().String("ref-label", "", "Shortcut: new label embedded in resource_ref (local_directory)")
-	projectResourceUpdateCmd.Flags().String("ref", "", "Generic JSON resource_ref payload, or a github_repo checkout ref")
+	projectResourceUpdateCmd.Flags().String("ref", "", "Generic JSON resource_ref payload, or a github_repo/gitea_repo checkout ref")
 	projectResourceUpdateCmd.Flags().String("label", "", "New human-readable label; pass an empty string to clear")
 	projectResourceUpdateCmd.Flags().Bool("clear-label", false, "Clear the human-readable label")
 	projectResourceUpdateCmd.Flags().Int32("position", 0, "New display position")
@@ -586,13 +587,13 @@ func runProjectResourceAdd(cmd *cobra.Command, args []string) error {
 		body["resource_ref"] = ref
 	} else {
 		switch resourceType {
-		case "github_repo":
+		case "github_repo", "gitea_repo":
 			ref, has, err := buildResourceRefFromFlags(cmd, resourceType, nil)
 			if err != nil {
 				return err
 			}
 			if !has {
-				return fmt.Errorf("github_repo requires --url (or pass a JSON payload via --ref)")
+				return fmt.Errorf("%s requires --url (or pass a JSON payload via --ref)", resourceType)
 			}
 			body["resource_ref"] = ref
 		case "local_directory":
@@ -753,21 +754,22 @@ func buildResourceRefFromRefFlag(cmd *cobra.Command, resourceType string, existi
 	}
 	rawRef, _ := cmd.Flags().GetString("ref")
 	rawRef = strings.TrimSpace(rawRef)
-	// --ref is the generic JSON resource_ref escape hatch. For github_repo it
-	// does double duty: a JSON object/array ("{...}" / "[...]") is still the
-	// escape hatch, but any other value — including bare scalars like a numeric
-	// tag ("2024") or an all-digit short SHA ("1234567") — is a checkout-ref
+	// --ref is the generic JSON resource_ref escape hatch. For github_repo and
+	// gitea_repo (identical ref shape — see buildResourceRefFromFlags) it does
+	// double duty: a JSON object/array ("{...}" / "[...]") is still the escape
+	// hatch, but any other value — including bare scalars like a numeric tag
+	// ("2024") or an all-digit short SHA ("1234567") — is a checkout-ref
 	// shortcut that merges with --url. Only parse JSON when the value is
 	// actually meant as JSON; otherwise json.Unmarshal would accept "2024" as a
 	// number and silently swallow a legitimate checkout ref.
-	if rawRef != "" && (resourceType != "github_repo" || looksLikeJSONPayload(rawRef)) {
+	if rawRef != "" && (!isGitRepoResourceType(resourceType) || looksLikeJSONPayload(rawRef)) {
 		var ref any
 		if err := json.Unmarshal([]byte(rawRef), &ref); err != nil {
 			return nil, false, fmt.Errorf("--ref is not valid JSON: %w", err)
 		}
 		return ref, true, nil
 	}
-	if resourceType != "github_repo" {
+	if !isGitRepoResourceType(resourceType) {
 		return nil, false, fmt.Errorf("--ref must be a JSON resource_ref payload for resource type %q", resourceType)
 	}
 	ref, has, err := buildResourceRefFromFlags(cmd, resourceType, existingRef)
@@ -782,6 +784,13 @@ func looksLikeJSONPayload(raw string) bool {
 	return strings.HasPrefix(raw, "{") || strings.HasPrefix(raw, "[")
 }
 
+// isGitRepoResourceType reports whether resourceType uses the shared
+// {url, ref?, default_branch_hint?} ref shape (github_repo and gitea_repo —
+// identical shape, only the resource_type differs for the provider icon).
+func isGitRepoResourceType(resourceType string) bool {
+	return resourceType == "github_repo" || resourceType == "gitea_repo"
+}
+
 // buildResourceRefFromFlags collects the per-type shortcut flags into a
 // resource_ref payload, seeding from existingRef so partial edits (only
 // --default-branch-hint, only --ref-label) preserve the unmentioned fields.
@@ -792,7 +801,7 @@ func looksLikeJSONPayload(raw string) bool {
 // required fields are still rejected.
 func buildResourceRefFromFlags(cmd *cobra.Command, resourceType string, existingRef map[string]any) (map[string]any, bool, error) {
 	switch resourceType {
-	case "github_repo":
+	case "github_repo", "gitea_repo":
 		urlSet := cmd.Flags().Changed("url")
 		hintSet := cmd.Flags().Changed("default-branch-hint")
 		refSet := cmd.Flags().Changed("ref")
@@ -838,7 +847,7 @@ func buildResourceRefFromFlags(cmd *cobra.Command, resourceType string, existing
 			}
 		}
 		if _, ok := ref["url"]; !ok {
-			return nil, false, fmt.Errorf("github_repo: --url is required (no existing url to merge with)")
+			return nil, false, fmt.Errorf("%s: --url is required (no existing url to merge with)", resourceType)
 		}
 		return ref, true, nil
 	case "local_directory":
