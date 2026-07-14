@@ -127,7 +127,7 @@ func TestSyncWorkspacesSkipsReposRefreshOnExistingWorkspace(t *testing.T) {
 		t.Fatalf("precondition: expected co-author hook to start enabled")
 	}
 
-	if err := d.syncWorkspacesFromAPI(context.Background()); err != nil {
+	if err := d.syncWorkspacesFromAPI(context.Background(), false); err != nil {
 		t.Fatalf("syncWorkspacesFromAPI: %v", err)
 	}
 
