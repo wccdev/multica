@@ -87,7 +87,7 @@ Restart the API after setting the env vars.
 
 ### 3. Run migrations
 
-The integration ships its tables in migration `175_gitea_integration`. If you're upgrading an older deployment:
+The integration ships its tables in migration `9000_gitea_integration`. This fork reserves migration numbers 9000+ for its own fork-only migrations (see the comment at the top of that file) so they never collide with a future upstream migration reusing the same number. If you're upgrading an older deployment:
 
 ```bash
 make migrate-up

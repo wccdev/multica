@@ -4,6 +4,19 @@
 -- the link table joining issues ↔ Gitea PRs. Kept fully separate from the
 -- github_* tables (own link table, not a shared issue_pull_request) so this
 -- migration never touches GitHub's schema.
+--
+-- Numbered 9000 (not the next sequential number after upstream's highest)
+-- because this repo is a fork that regularly merges multica-ai/multica's
+-- upstream `main`, and upstream keeps adding migrations in the normal
+-- 001-999 range. A fork-side migration living in that shared range WILL
+-- eventually collide with an upstream migration claiming the same number
+-- (this happened once already — this file was originally 167, then 175,
+-- each time stomped by an upstream migration reusing that number a few
+-- weeks later). 9000+ is a block reserved for this fork's own
+-- migrations, far outside any range upstream will reach organically.
+-- Any future fork-only migration should continue at 9001, 9002, etc. —
+-- never renumber this file again, and never pick a number below 9000 for
+-- a new fork-only migration.
 
 CREATE TABLE gitea_connection (
     id                 UUID PRIMARY KEY DEFAULT gen_random_uuid(),
