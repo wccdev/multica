@@ -50,7 +50,13 @@ func (b *cursorBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 		cancel()
 		return nil, fmt.Errorf("cursor stdout pipe: %w", err)
 	}
-	cmd.Stderr = newLogWriter(b.cfg.Logger, "[cursor:stderr] ")
+	// Capture stderr into both the daemon log (as before) and a bounded tail
+	// buffer so we can include the last few KB in Result.Error when
+	// cursor-agent exits unexpectedly. Without the tail, an exit-code-only
+	// failure looks like "cursor-agent exited with error: exit status 1" —
+	// which is useless for root-causing crashes inside the remote runtime.
+	stderrBuf := newStderrTail(newLogWriter(b.cfg.Logger, "[cursor:stderr] "), agentStderrTailBytes)
+	cmd.Stderr = stderrBuf
 
 	if err := cmd.Start(); err != nil {
 		cancel()
@@ -209,6 +215,15 @@ func (b *cursorBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 		} else if exitErr != nil && finalStatus == "completed" && !resultSeen {
 			finalStatus = "failed"
 			finalError = fmt.Sprintf("cursor-agent exited with error: %v", exitErr)
+		}
+
+		// cmd.Wait() has returned — os/exec's stderr copy goroutine has
+		// observed every byte cursor-agent wrote to stderr before exiting, so
+		// stderrBuf.Tail() is safe to sample now. Attach the tail to any
+		// non-empty failure message; callers upstream surface this as the
+		// task's error field, which is the only place users see it.
+		if finalError != "" {
+			finalError = withAgentStderr(finalError, "cursor", stderrBuf.Tail())
 		}
 
 		b.cfg.Logger.Info("cursor-agent finished", "pid", cmd.Process.Pid, "status", finalStatus, "duration", duration.Round(time.Millisecond).String())

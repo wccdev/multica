@@ -5,6 +5,7 @@ package agent
 import (
 	"log/slog"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -96,6 +97,48 @@ sleep 10
 	}
 	if result.SessionID != "sess-terminal-error" {
 		t.Fatalf("session id = %q, want sess-terminal-error", result.SessionID)
+	}
+}
+
+func TestCursorExecuteSurfacesStderrWhenChildExitsEarly(t *testing.T) {
+	t.Parallel()
+
+	// Fake cursor-agent binary that writes a crash message to stderr, then
+	// exits non-zero before emitting any stream-json "result" event. This is
+	// the exact failure mode that produced the opaque "cursor-agent exited
+	// with error: exit status 1" — without sampling stderrBuf.Tail() after
+	// cmd.Wait() returns, the real cause was only visible in daemon logs.
+	script := "#!/bin/sh\n" +
+		"echo 'panic: remote runtime lost connection' >&2\n" +
+		"exit 1\n"
+	fakePath := filepath.Join(t.TempDir(), "cursor-agent")
+	writeTestExecutable(t, fakePath, []byte(script))
+
+	backend, err := New("cursor", Config{ExecutablePath: fakePath, Logger: slog.Default()})
+	if err != nil {
+		t.Fatalf("New(cursor): %v", err)
+	}
+	session, err := backend.Execute(t.Context(), "hello", ExecOptions{Timeout: 5 * time.Second})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	go func() {
+		for range session.Messages {
+		}
+	}()
+
+	result := <-session.Result
+	if result.Status != "failed" {
+		t.Fatalf("status = %q, want failed; error=%q", result.Status, result.Error)
+	}
+	if !strings.Contains(result.Error, "cursor-agent exited with error") {
+		t.Fatalf("expected error to mention exit, got %q", result.Error)
+	}
+	if !strings.Contains(result.Error, "remote runtime lost connection") {
+		t.Fatalf("expected error to include stderr hint, got %q", result.Error)
+	}
+	if !strings.Contains(result.Error, "cursor stderr:") {
+		t.Fatalf("expected stderr label in error, got %q", result.Error)
 	}
 }
 
