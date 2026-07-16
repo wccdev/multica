@@ -63,10 +63,7 @@ function RepoUrlText({
     <Tooltip>
       <TooltipTrigger
         render={
-          <span
-            title={url}
-            className={cn("truncate flex-1 text-left", className)}
-          >
+          <span className={cn("truncate flex-1 text-left", className)}>
             {url}
           </span>
         }
