@@ -4,6 +4,7 @@ package agent
 
 import (
 	"log/slog"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -92,53 +93,155 @@ sleep 10
 	if result.Error != "failed hard" {
 		t.Fatalf("error = %q, want failed hard", result.Error)
 	}
-	if result.Output != "failed hard" {
-		t.Fatalf("output = %q, want failed hard", result.Output)
+	if result.Output != "" {
+		t.Fatalf("output = %q, want empty failed output", result.Output)
 	}
 	if result.SessionID != "sess-terminal-error" {
 		t.Fatalf("session id = %q, want sess-terminal-error", result.SessionID)
 	}
 }
 
-func TestCursorExecuteSurfacesStderrWhenChildExitsEarly(t *testing.T) {
-	t.Parallel()
-
-	// Fake cursor-agent binary that writes a crash message to stderr, then
-	// exits non-zero before emitting any stream-json "result" event. This is
-	// the exact failure mode that produced the opaque "cursor-agent exited
-	// with error: exit status 1" — without sampling stderrBuf.Tail() after
-	// cmd.Wait() returns, the real cause was only visible in daemon logs.
-	script := "#!/bin/sh\n" +
-		"echo 'panic: remote runtime lost connection' >&2\n" +
-		"exit 1\n"
-	fakePath := filepath.Join(t.TempDir(), "cursor-agent")
-	writeTestExecutable(t, fakePath, []byte(script))
-
-	backend, err := New("cursor", Config{ExecutablePath: fakePath, Logger: slog.Default()})
+func TestCursorExecuteReportsSanitizedStderrOnProcessFailure(t *testing.T) {
+	homeDir, err := os.UserHomeDir()
 	if err != nil {
-		t.Fatalf("New(cursor): %v", err)
+		t.Fatalf("UserHomeDir: %v", err)
 	}
-	session, err := backend.Execute(t.Context(), "hello", ExecOptions{Timeout: 5 * time.Second})
-	if err != nil {
-		t.Fatalf("Execute: %v", err)
-	}
-	go func() {
-		for range session.Messages {
-		}
-	}()
 
-	result := <-session.Result
+	script := `#!/bin/sh
+dd if=/dev/zero bs=4096 count=1 2>/dev/null | tr '\000' x >&2
+printf '\nAuthorization: Bearer cursor-secret-token-value\npath=%s/private\n' "$HOME" >&2
+exit 1
+`
+	result := executeFakeCursor(t, script)
+
 	if result.Status != "failed" {
 		t.Fatalf("status = %q, want failed; error=%q", result.Status, result.Error)
 	}
-	if !strings.Contains(result.Error, "cursor-agent exited with error") {
-		t.Fatalf("expected error to mention exit, got %q", result.Error)
+	for _, want := range []string{
+		"cursor-agent exited with error: exit status 1",
+		"result_seen=false",
+		"exit_code=1",
+		"cursor stderr:",
+		"Authorization: [REDACTED]",
+		"actions completed before finalization may already have taken effect",
+	} {
+		if !strings.Contains(result.Error, want) {
+			t.Errorf("error = %q, want substring %q", result.Error, want)
+		}
 	}
-	if !strings.Contains(result.Error, "remote runtime lost connection") {
-		t.Fatalf("expected error to include stderr hint, got %q", result.Error)
+	for _, secret := range []string{"cursor-secret-token-value", homeDir} {
+		if strings.Contains(result.Error, secret) {
+			t.Errorf("error leaked %q: %q", secret, result.Error)
+		}
 	}
-	if !strings.Contains(result.Error, "cursor stderr:") {
-		t.Fatalf("expected stderr label in error, got %q", result.Error)
+	if result.Output != "" {
+		t.Fatalf("output = %q, want empty failed output", result.Output)
+	}
+	if len(result.Error) > agentStderrTailBytes+1024 {
+		t.Fatalf("error length = %d, want bounded stderr diagnostic", len(result.Error))
+	}
+}
+
+func TestCursorExecuteReportsMalformedTerminalEvent(t *testing.T) {
+	script := `#!/bin/sh
+printf '%s\n' '{"type":"system","subtype":"init","session_id":"sess-malformed"}'
+printf '%s\n' '{"type":"result","subtype":"success","result":"truncated"'
+exit 1
+`
+	result := executeFakeCursor(t, script)
+
+	if result.Status != "failed" {
+		t.Fatalf("status = %q, want failed; error=%q", result.Status, result.Error)
+	}
+	for _, want := range []string{
+		"result_seen=false",
+		"invalid_event_count=1",
+		"last_event_type=system",
+	} {
+		if !strings.Contains(result.Error, want) {
+			t.Errorf("error = %q, want substring %q", result.Error, want)
+		}
+	}
+	if result.Output != "" {
+		t.Fatalf("output = %q, want empty failed output", result.Output)
+	}
+}
+
+func TestCursorExecuteReportsScannerOverflow(t *testing.T) {
+	script := `#!/bin/sh
+printf '%s\n' '{"type":"system","subtype":"init","session_id":"sess-overflow"}'
+dd if=/dev/zero bs=1048576 count=11 2>/dev/null | tr '\000' x
+printf '\n'
+`
+	result := executeFakeCursor(t, script)
+
+	if result.Status != "failed" {
+		t.Fatalf("status = %q, want failed; error=%q", result.Status, result.Error)
+	}
+	for _, want := range []string{
+		"cursor-agent stdout read error",
+		"token too long",
+		"result_seen=false",
+		"scanner_error=true",
+		"last_event_type=system",
+	} {
+		if !strings.Contains(result.Error, want) {
+			t.Errorf("error = %q, want substring %q", result.Error, want)
+		}
+	}
+	if result.Output != "" {
+		t.Fatalf("output = %q, want empty failed output", result.Output)
+	}
+}
+
+func TestCursorExecuteFailsOnCleanEOFWithoutResult(t *testing.T) {
+	script := `#!/bin/sh
+printf '%s\n' '{"type":"system","subtype":"init","session_id":"sess-no-result"}'
+printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"text","text":"partial answer"}]}}'
+`
+	result := executeFakeCursor(t, script)
+
+	if result.Status != "failed" {
+		t.Fatalf("status = %q, want failed; error=%q", result.Status, result.Error)
+	}
+	for _, want := range []string{
+		"cursor-agent stream ended without terminal result",
+		"result_seen=false",
+		"exit_code=0",
+		"last_event_type=assistant",
+	} {
+		if !strings.Contains(result.Error, want) {
+			t.Errorf("error = %q, want substring %q", result.Error, want)
+		}
+	}
+	if result.Output != "" {
+		t.Fatalf("output = %q, want partial transcript suppressed", result.Output)
+	}
+}
+
+func TestCursorExecutePreservesStructuredStreamError(t *testing.T) {
+	script := `#!/bin/sh
+printf '%s\n' '{"type":"system","subtype":"init","session_id":"sess-stream-error"}'
+printf '%s\n' '{"type":"error","error":"provider rejected request"}'
+exit 1
+`
+	result := executeFakeCursor(t, script)
+
+	if result.Status != "failed" {
+		t.Fatalf("status = %q, want failed; error=%q", result.Status, result.Error)
+	}
+	for _, want := range []string{
+		"provider rejected request",
+		"result_seen=false",
+		"exit_code=1",
+		"last_event_type=error",
+	} {
+		if !strings.Contains(result.Error, want) {
+			t.Errorf("error = %q, want substring %q", result.Error, want)
+		}
+	}
+	if result.Output != "" {
+		t.Fatalf("output = %q, want empty failed output", result.Output)
 	}
 }
 
