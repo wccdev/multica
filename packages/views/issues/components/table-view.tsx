@@ -136,6 +136,7 @@ import {
 } from "./table-view-model";
 import type { ChildProgress } from "./list-row";
 import { InfiniteScrollSentinel } from "./infinite-scroll-sentinel";
+import { IssueAgentActivityIndicator } from "./issue-agent-activity-indicator";
 
 const SELECT_COLUMN_ID = "__select";
 const ADD_COLUMN_ID = "__add";
@@ -666,6 +667,7 @@ export function InlineTitle({
       <span className="w-16 shrink-0 text-xs text-muted-foreground">
         {row.issue.identifier}
       </span>
+      <IssueAgentActivityIndicator issueId={row.issue.id} />
       {editing ? (
         <Input
           autoFocus
@@ -1663,6 +1665,17 @@ export function TableView({
         return value.actor
           ? getActorName(value.actor.type, value.actor.id)
           : t(($) => $.table.unassigned);
+      }
+      if (value.kind === "project") {
+        return value.project_id
+          ? value.project_id
+          : t(($) => $.swimlane.no_project);
+      }
+      if (value.kind === "parent") {
+        if (value.value_state === "unset") {
+          return t(($) => $.swimlane.no_parent);
+        }
+        return value.parent?.title ?? t(($) => $.table.value_unavailable);
       }
       if (value.value_state === "unset") return t(($) => $.table.no_value);
       if (value.value_state === "unavailable") {

@@ -5,6 +5,70 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+describe("ApiClient pull-request response schema", () => {
+  const validPR = {
+    id: "pr-1",
+    provider: "github",
+    workspace_id: "ws-1",
+    repo_owner: "acme",
+    repo_name: "widget",
+    number: 7,
+    title: "MUL-1: fix",
+    state: "open",
+    html_url: "https://github.example/acme/widget/pull/7",
+    branch: "fix/mul-1",
+    author_login: "octocat",
+    author_avatar_url: null,
+    merged_at: null,
+    closed_at: null,
+    pr_created_at: "2026-01-01T00:00:00Z",
+    pr_updated_at: "2026-01-01T00:00:00Z",
+    snapshot_available: true,
+    checks_rollup: "failure",
+    failed_check_names: ["backend"],
+  };
+
+  it("parses and defaults a valid pull-request list", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ pull_requests: [validPR] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+
+    const result = await new ApiClient("https://api.example.test").listIssuePullRequests("issue-1");
+    expect(result.pull_requests[0]).toMatchObject({
+      id: "pr-1",
+      failed_check_names: ["backend"],
+      checks_total: 0,
+    });
+  });
+
+  it("falls back safely when failed_check_names is malformed", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            pull_requests: [{ ...validPR, failed_check_names: "backend" }],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+      ),
+    );
+
+    await expect(
+      new ApiClient("https://api.example.test").listIssuePullRequests("issue-1"),
+    ).resolves.toEqual({ pull_requests: [] });
+  });
+});
+
 describe("ApiClient server Table query", () => {
   it("posts the canonical query to the group and branch endpoints", async () => {
     const fetchMock = vi
@@ -226,6 +290,145 @@ describe("ApiClient server Table query", () => {
         { value: { kind: "assignee", actor: { type: "service", id: "bot-1" } } },
       ],
     });
+  });
+
+  it("parses compound lane descriptors and posts the additive union", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          query_fingerprint: "sha256:compound",
+          total: 2,
+          groups: [
+            {
+              key: "parent:parent-1",
+              value: {
+                kind: "parent",
+                parent_id: "parent-1",
+                parent: {
+                  id: "parent-1",
+                  number: 10,
+                  identifier: "MUL-10",
+                  title: "Parent",
+                  status: "todo",
+                },
+                value_state: "value",
+              },
+              count: 2,
+              secondary_groups: [
+                {
+                  key: "compound:opaque:status:todo",
+                  value: { kind: "status", status: "todo" },
+                  count: 2,
+                },
+              ],
+            },
+          ],
+          next_cursor: null,
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new ApiClient("https://api.example.test");
+    const query = {
+      scope: { kind: "workspace" as const },
+      filters: {},
+      sort: { field: "position" as const, direction: "asc" as const },
+    };
+
+    await expect(
+      client.listIssueTableGroups({
+        query,
+        group: {
+          kind: "compound",
+          primary: "parent",
+          secondary: "status",
+          secondary_values: ["todo"],
+        },
+      }),
+    ).resolves.toMatchObject({
+      groups: [
+        {
+          value: { kind: "parent", parent: { title: "Parent" } },
+          secondary_groups: [
+            { value: { kind: "status", status: "todo" }, count: 2 },
+          ],
+        },
+      ],
+    });
+    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({
+      body: expect.stringContaining(
+        '"kind":"compound","primary":"parent","secondary":"status","secondary_values":["todo"]',
+      ),
+    });
+  });
+});
+
+describe("ApiClient issue move intent", () => {
+  it("posts relative anchors without a client-authored position", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ id: "issue-1", position: 15 }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new ApiClient("https://api.example.test");
+
+    await client.moveIssue("issue-1", {
+      status: "in_progress",
+      before_id: "issue-0",
+      after_id: "issue-2",
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.example.test/api/issues/issue-1/move",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          status: "in_progress",
+          before_id: "issue-0",
+          after_id: "issue-2",
+        }),
+      }),
+    );
+  });
+});
+
+describe("ApiClient workspace working agents", () => {
+  it("supports an optional source-type filter", async () => {
+    const payload = [
+      {
+        id: "agent-1",
+        name: "Agent 1",
+        avatar_url: null,
+        running_task_count: 2,
+        issue_ids: ["issue-1"],
+      },
+    ];
+    const fetchMock = vi.fn().mockImplementation(() =>
+      Promise.resolve(
+        new Response(JSON.stringify(payload), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new ApiClient("https://api.example.test");
+    await expect(
+      client.getWorkspaceWorkingAgents("issue", "assigned"),
+    ).resolves.toEqual(payload);
+    await expect(
+      client.getWorkspaceWorkingAgents("issue"),
+    ).resolves.toEqual(payload);
+    await expect(client.getWorkspaceWorkingAgents()).resolves.toEqual(payload);
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      "https://api.example.test/api/working-agents?type=issue&scope=mine&relation=assigned",
+      "https://api.example.test/api/working-agents?type=issue",
+      "https://api.example.test/api/working-agents",
+    ]);
   });
 });
 
