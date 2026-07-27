@@ -120,7 +120,7 @@
     "repos_empty": "还没有工作区级别的仓库。可以在下方粘贴 URL 临时关联一个。",
     "repos_search_placeholder": "搜索仓库...",
     "repos_search_empty": "没有匹配的仓库。",
-    "repos_url_placeholder": "https://github.com/owner/repo 或 Gitea 仓库 URL",
+    "repos_url_placeholder": "https://github.com/owner/repo",
     "repos_add": "添加",
     "repos_selected": "已选",
     "source_pill_local": "本地目录",

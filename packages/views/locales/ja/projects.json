@@ -89,7 +89,7 @@
     "repos_search_empty": "検索条件に一致するリポジトリはありません。",
     "attached_badge": "添付済み",
     "remove_tooltip": "削除",
-    "url_placeholder": "https://github.com/owner/repo または Gitea リポジトリの URL",
+    "url_placeholder": "https://github.com/owner/repo",
     "url_submit": "追加",
     "toast_attached": "リポジトリを添付しました",
     "toast_attach_failed": "添付できませんでした",

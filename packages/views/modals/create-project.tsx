@@ -14,7 +14,6 @@ import { useWorkspaceId } from "@multica/core/hooks";
 import { useCurrentWorkspace, useWorkspacePaths } from "@multica/core/paths";
 import { memberListOptions, agentListOptions } from "@multica/core/workspace/queries";
 import { useActorName } from "@multica/core/workspace/hooks";
-import { giteaConnectionOptions, giteaHostMatches } from "@multica/core/gitea";
 import type { ProjectStatus, ProjectPriority, ProjectResourceType } from "@multica/core/types";
 import { cn } from "@multica/ui/lib/utils";
 import { toast } from "sonner";
@@ -33,7 +32,6 @@ import { ContentEditor, type ContentEditorRef, TitleEditor } from "../editor";
 import { PriorityIcon } from "../issues/components/priority-icon";
 import { ActorAvatar } from "../common/actor-avatar";
 import { RepoProviderIcon, repoProviderResourceType } from "../common/repo-provider-icon";
-import { GiteaMark } from "../settings/components/gitea-mark";
 import { GitHubMark } from "../settings/components/github-mark";
 import { useNavigation } from "../navigation";
 import { useT } from "../i18n";
@@ -85,16 +83,6 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
   const wsId = useWorkspaceId();
   const { data: members = [] } = useQuery(memberListOptions(wsId));
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
-  // Determines whether a repo picked in this modal gets tagged github_repo
-  // or gitea_repo (and which brand icon it renders with) — see
-  // RepoProviderIcon and repoResourceType below.
-  const { data: giteaConnectionData } = useQuery({
-    ...giteaConnectionOptions(wsId),
-    enabled: !!wsId,
-  });
-  const giteaBaseUrl = giteaConnectionData?.connection ? giteaConnectionData.base_url : undefined;
-  const repoResourceType = (url: string): ProjectResourceType =>
-    repoProviderResourceType(url, giteaBaseUrl);
   const { getActorName } = useActorName();
   const projectStatusLabels = useProjectStatusLabels();
   const projectPriorityLabels = useProjectPriorityLabels();
@@ -119,8 +107,8 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
   const [iconPickerOpen, setIconPickerOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
-  // Repos selected to attach as github_repo/gitea_repo resources (per-URL,
-  // see repoResourceType) after the project is created. Stored as URLs (not
+  // Repos selected to attach as github_repo resources (per-URL, see
+  // repoResourceType) after the project is created. Stored as URLs (not
   // full ProjectResource rows) — they're not persisted until handleSubmit
   // fires the createProjectResource calls.
   const [selectedRepos, setSelectedRepos] = useState<string[]>([]);
@@ -133,9 +121,8 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
     repo.url.toLowerCase().includes(repoQuery),
   );
 
-  // A project's source is binary: either a set of repos (GitHub or Gitea —
-  // see repoResourceType) OR a local working directory — never both. Mode
-  // is the source of truth for what
+  // A project's source is binary: either a set of GitHub repos OR a local
+  // working directory — never both. Mode is the source of truth for what
   // gets persisted on submit; switching mode does NOT clear the other
   // side's stash, so toggling back and forth restores the user's prior
   // selection. Only the mode-matching side is sent to the API. Local mode
@@ -223,7 +210,7 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
       | undefined;
     if (sourceMode === "repos" && selectedRepos.length > 0) {
       resources = selectedRepos.map((url) => ({
-        resource_type: repoResourceType(url),
+        resource_type: repoProviderResourceType(),
         resource_ref: { url },
       }));
     } else if (
@@ -571,11 +558,7 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
                     </>
                   ) : (
                     <>
-                      {giteaBaseUrl && selectedRepos.every((url) => giteaHostMatches(url, giteaBaseUrl)) ? (
-                        <GiteaMark className="size-3" />
-                      ) : (
-                        <GitHubMark className="size-3" />
-                      )}
+                      <GitHubMark className="size-3" />
                       <span>
                         {selectedRepos.length === 0
                           ? t(($) => $.create_project.repos_pill)
@@ -662,7 +645,7 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
                                 readOnly
                                 className="size-3.5"
                               />
-                              <RepoProviderIcon url={repo.url} giteaBaseUrl={giteaBaseUrl} className="size-3.5" />
+                              <RepoProviderIcon className="size-3.5" />
                               <RepoUrlText url={repo.url} />
                             </button>
                           );
@@ -708,7 +691,7 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
                           key={url}
                           className="flex items-center gap-2 text-xs"
                         >
-                          <RepoProviderIcon url={url} giteaBaseUrl={giteaBaseUrl} className="size-3 text-muted-foreground" />
+                          <RepoProviderIcon className="size-3 text-muted-foreground" />
                           <RepoUrlText url={url} />
                           <button
                             type="button"

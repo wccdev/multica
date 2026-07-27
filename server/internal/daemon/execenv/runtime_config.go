@@ -118,18 +118,14 @@ func sanitizeEmailForBrief(email string) string {
 func formatProjectResource(r ProjectResourceForEnv) string {
 	label := r.Label
 	switch r.ResourceType {
-	case "github_repo", "gitea_repo":
+	case "github_repo":
 		var payload struct {
 			URL               string `json:"url"`
 			DefaultBranchHint string `json:"default_branch_hint,omitempty"`
 			Ref               string `json:"ref,omitempty"`
 		}
 		_ = json.Unmarshal(r.ResourceRef, &payload)
-		providerLabel := "GitHub repo"
-		if r.ResourceType == "gitea_repo" {
-			providerLabel = "Gitea repo"
-		}
-		out := fmt.Sprintf("**%s**: %s", providerLabel, payload.URL)
+		out := fmt.Sprintf("**GitHub repo**: %s", payload.URL)
 		details := make([]string, 0, 2)
 		if payload.Ref != "" {
 			details = append(details, fmt.Sprintf("checkout ref: `%s`", payload.Ref))

@@ -120,7 +120,7 @@
     "repos_empty": "아직 워크스페이스 수준 저장소가 없습니다. 아래에 URL을 붙여 넣어 임시로 연결하세요.",
     "repos_search_placeholder": "저장소 검색...",
     "repos_search_empty": "검색 결과와 일치하는 저장소가 없습니다.",
-    "repos_url_placeholder": "https://github.com/owner/repo or a Gitea repo URL",
+    "repos_url_placeholder": "https://github.com/owner/repo",
     "repos_add": "추가",
     "repos_selected": "선택됨",
     "source_pill_local": "로컬 디렉터리",

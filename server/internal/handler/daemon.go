@@ -1803,12 +1803,10 @@ func (h *Handler) buildClaimedTaskResponse(r *http.Request, task *db.AgentTaskQu
 							ResourceRef:  ref,
 							Label:        label,
 						})
-						// Lift github_repo/gitea_repo resources into the daemon's
-						// repo list so `multica repo checkout` and the meta-skill
-						// render them as the issue's repos. Both types are "clone
-						// this git URL" — only the resource_type differs (drives
-						// the UI's provider icon), so the checkout logic is shared.
-						if row.ResourceType == "github_repo" || row.ResourceType == "gitea_repo" {
+						// Lift github_repo resources into the daemon's repo list so
+						// `multica repo checkout` and the meta-skill render them as
+						// the issue's repos.
+						if row.ResourceType == "github_repo" {
 							var payload struct {
 								URL string `json:"url"`
 								Ref string `json:"ref,omitempty"`
@@ -2333,7 +2331,7 @@ func (h *Handler) buildClaimedTaskResponse(r *http.Request, task *db.AgentTaskQu
 								ResourceRef:  ref,
 								Label:        label,
 							})
-							if row.ResourceType == "github_repo" || row.ResourceType == "gitea_repo" {
+							if row.ResourceType == "github_repo" {
 								var payload struct {
 									URL string `json:"url"`
 									Ref string `json:"ref,omitempty"`

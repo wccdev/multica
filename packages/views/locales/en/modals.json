@@ -122,7 +122,7 @@
     "repos_empty": "No workspace-level repos yet. Paste a URL below to attach one ad-hoc.",
     "repos_search_placeholder": "Search repositories...",
     "repos_search_empty": "No repositories match your search.",
-    "repos_url_placeholder": "https://github.com/owner/repo or a Gitea repo URL",
+    "repos_url_placeholder": "https://github.com/owner/repo",
     "repos_add": "Add",
     "repos_selected": "Selected",
     "source_pill_local": "Local directory",

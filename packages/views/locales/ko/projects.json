@@ -89,7 +89,7 @@
     "repos_search_empty": "검색 결과와 일치하는 저장소가 없습니다.",
     "attached_badge": "연결됨",
     "remove_tooltip": "제거",
-    "url_placeholder": "https://github.com/owner/repo or a Gitea repo URL",
+    "url_placeholder": "https://github.com/owner/repo",
     "url_submit": "추가",
     "toast_attached": "저장소를 연결했습니다",
     "toast_attach_failed": "연결하지 못했습니다",

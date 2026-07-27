@@ -10,32 +10,17 @@ import (
 	"github.com/multica-ai/multica/server/internal/runtimeapps"
 )
 
-// formatProjectResource renders github_repo and gitea_repo with distinct
-// provider labels but otherwise identical formatting — both are "clone this
-// git URL" resources; only the label the agent sees should differ.
+// formatProjectResource renders github_repo with the GitHub provider label.
 func TestFormatProjectResourceProviderLabel(t *testing.T) {
-	cases := []struct {
-		resourceType string
-		wantPrefix   string
-	}{
-		{"github_repo", "**GitHub repo**: https://github.com/acme/widget"},
-		{"gitea_repo", "**Gitea repo**: https://gitea.internal.example.com/acme/widget"},
+	url := "https://github.com/acme/widget"
+	r := ProjectResourceForEnv{
+		ResourceType: "github_repo",
+		ResourceRef:  []byte(fmt.Sprintf(`{"url":%q}`, url)),
 	}
-	for _, tc := range cases {
-		t.Run(tc.resourceType, func(t *testing.T) {
-			url := "https://github.com/acme/widget"
-			if tc.resourceType == "gitea_repo" {
-				url = "https://gitea.internal.example.com/acme/widget"
-			}
-			r := ProjectResourceForEnv{
-				ResourceType: tc.resourceType,
-				ResourceRef:  []byte(fmt.Sprintf(`{"url":%q}`, url)),
-			}
-			got := formatProjectResource(r)
-			if !strings.HasPrefix(got, tc.wantPrefix) {
-				t.Errorf("formatProjectResource(%s) = %q, want prefix %q", tc.resourceType, got, tc.wantPrefix)
-			}
-		})
+	got := formatProjectResource(r)
+	wantPrefix := "**GitHub repo**: https://github.com/acme/widget"
+	if !strings.HasPrefix(got, wantPrefix) {
+		t.Errorf("formatProjectResource(github_repo) = %q, want prefix %q", got, wantPrefix)
 	}
 }
 

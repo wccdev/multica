@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/multica-ai/multica/server/internal/attributionbackfill"
+	"github.com/multica-ai/multica/server/internal/giteavcsbackfill"
 	"github.com/multica-ai/multica/server/internal/logger"
 	"github.com/multica-ai/multica/server/internal/migrations"
 	"github.com/multica-ai/multica/server/internal/taskusagebackfill"
@@ -51,6 +52,7 @@ type preMigrationHook func(ctx context.Context, pool *pgxpool.Pool) error
 var preMigrationHooks = map[string]preMigrationHook{
 	"103_drop_legacy_daily_rollups":                         runTaskUsageHourlyHook,
 	"198_agent_task_attribution_strict_constraint_validate": runAttributionStrictHook,
+	"9001_gitea_retirement_backfill":                        runGiteaVCSBackfillHook,
 }
 
 func runTaskUsageHourlyHook(ctx context.Context, pool *pgxpool.Pool) error {
@@ -85,6 +87,28 @@ func runAttributionStrictHook(ctx context.Context, pool *pgxpool.Pool) error {
 		"rows_backfilled", res.RowsBackfilled,
 		"batches", res.Batches,
 		"mismatch_normalized", res.MismatchNormalized)
+	return nil
+}
+
+// runGiteaVCSBackfillHook migrates this fork's retired Gitea integration
+// (workspace connections, mirrored PRs, issue links) into upstream's native
+// VCS integration before migration 9001 relabels gitea_repo project
+// resources to github_repo. See giteavcsbackfill's package doc for why a Go
+// hook is required (secretbox re-keying) and why webhooks must be re-pointed
+// manually afterward.
+func runGiteaVCSBackfillHook(ctx context.Context, pool *pgxpool.Pool) error {
+	res, err := giteavcsbackfill.Hook(ctx, pool, giteavcsbackfill.HookOptions{})
+	if err != nil {
+		return fmt.Errorf("gitea->vcs pre-9001 backfill hook: %w", err)
+	}
+	if res.Skipped != "" {
+		slog.Info("gitea->vcs backfill hook: skipped", "reason", res.Skipped)
+		return nil
+	}
+	slog.Info("gitea->vcs backfill hook: complete",
+		"connections_migrated", res.ConnectionsMigrated,
+		"pull_requests_migrated", res.PullRequestsMigrated,
+		"issue_links_migrated", res.IssueLinksMigrated)
 	return nil
 }
 

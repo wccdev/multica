@@ -11,13 +11,10 @@ import (
 )
 
 // workspaceCoAuthoredByEnabled gates the prepare-commit-msg hook installed in
-// agent worktrees. The hook is shared by GitHub and Gitea (it's a plain git
-// hook with no host awareness), so it is only forced off by the provider
-// master switches when BOTH `github_enabled` and `gitea_enabled` are
-// explicitly false — a workspace that only ever touches one provider's
-// switch must not have the other provider's commits silently lose the
-// trailer. The function also defaults to true whenever settings are absent
-// or malformed so existing workspaces keep their historical behavior.
+// agent worktrees. It is forced off when `github_enabled` is explicitly
+// false, otherwise `co_authored_by_enabled` decides. The function also
+// defaults to true whenever settings are absent or malformed so existing
+// workspaces keep their historical behavior.
 func TestWorkspaceCoAuthoredByEnabled(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -32,27 +29,15 @@ func TestWorkspaceCoAuthoredByEnabled(t *testing.T) {
 		{"co_authored_by true", true, `{"co_authored_by_enabled":true}`, true},
 		{"co_authored_by false", true, `{"co_authored_by_enabled":false}`, false},
 		{
-			"github off alone does not force hook off (gitea unset defaults on)",
+			"github off forces hook off even when co_authored_by true",
 			true,
 			`{"github_enabled":false,"co_authored_by_enabled":true}`,
-			true,
-		},
-		{
-			"gitea off alone does not force hook off (github unset defaults on)",
-			true,
-			`{"gitea_enabled":false,"co_authored_by_enabled":true}`,
-			true,
-		},
-		{
-			"both providers off forces hook off even when co_authored_by true",
-			true,
-			`{"github_enabled":false,"gitea_enabled":false,"co_authored_by_enabled":true}`,
 			false,
 		},
 		{
-			"either provider on lets co_authored_by decide",
+			"github on lets co_authored_by decide",
 			true,
-			`{"github_enabled":true,"gitea_enabled":false,"co_authored_by_enabled":false}`,
+			`{"github_enabled":true,"co_authored_by_enabled":false}`,
 			false,
 		},
 		{"malformed settings defaults on", true, `not json`, true},

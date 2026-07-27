@@ -119,7 +119,6 @@ export type {
   ProjectResourceType,
   ProjectResourceRef,
   GithubRepoResourceRef,
-  GiteaRepoResourceRef,
   LocalDirectoryResourceRef,
   CreateProjectResourceRequest,
   UpdateProjectResourceRequest,
@@ -138,13 +137,6 @@ export type {
   ListGitHubInstallationsResponse,
   GitHubConnectResponse,
 } from "./github";
-export type {
-  GiteaConnection,
-  GiteaPullRequest,
-  GiteaPullRequestState,
-  GetGiteaConnectionResponse,
-  GiteaSyncResponse,
-} from "./gitea";
 export type {
   VCSProvider,
   VCSConnection,

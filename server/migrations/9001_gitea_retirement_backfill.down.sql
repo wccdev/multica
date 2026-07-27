@@ -1,0 +1,6 @@
+-- Not reversible: once project_resource rows are relabeled gitea_repo ->
+-- github_repo (and merged with rows that were already github_repo), there is
+-- no record of which ones to relabel back. The gitea.* backfill performed by
+-- this migration's pre-hook is additive (vcs_connection / vcs_pull_request /
+-- issue_vcs_pull_request rows) and is left in place; the source gitea_* rows
+-- were never deleted, so nothing here needs undoing on that side either.
