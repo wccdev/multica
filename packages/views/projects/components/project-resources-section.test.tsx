@@ -105,10 +105,14 @@ describe("ProjectResourcesSection — Gitea support", () => {
     renderSection();
 
     await user.click(screen.getByRole("button", { name: /Add resource/i }));
+    // githubShortLabel shortens github.com URLs to "owner/repo" (MUL-5221);
+    // gitea.internal.example.com is untouched by that helper and keeps its
+    // full-URL display, which is why the sibling test above still matches
+    // the full host+path.
     await waitFor(() => {
-      expect(screen.getByText(/github\.com\/acme\/other/)).toBeInTheDocument();
+      expect(screen.getByText(/^acme\/other$/)).toBeInTheDocument();
     });
-    await user.click(screen.getByText(/github\.com\/acme\/other/));
+    await user.click(screen.getByText(/^acme\/other$/));
 
     await waitFor(() => {
       expect(mockCreateResource).toHaveBeenCalledWith("proj-1", {
