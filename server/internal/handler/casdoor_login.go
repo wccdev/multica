@@ -198,7 +198,7 @@ func (h *Handler) CasdoorLogin(w http.ResponseWriter, r *http.Request) {
 	slog.Info("user logged in via casdoor", append(logger.RequestAttrs(r), "user_id", uuidToString(user.ID), "email", user.Email)...)
 	writeJSON(w, http.StatusOK, LoginResponse{
 		Token: tokenString,
-		User:  userToResponse(user),
+		User:  h.userToResponse(user),
 	})
 }
 
