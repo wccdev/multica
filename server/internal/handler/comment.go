@@ -22,21 +22,27 @@ import (
 )
 
 type CommentResponse struct {
-	ID             string               `json:"id"`
-	IssueID        string               `json:"issue_id"`
-	AuthorType     string               `json:"author_type"`
-	AuthorID       string               `json:"author_id"`
-	Content        string               `json:"content"`
-	Type           string               `json:"type"`
-	ParentID       *string              `json:"parent_id"`
-	CreatedAt      string               `json:"created_at"`
-	UpdatedAt      string               `json:"updated_at"`
-	ResolvedAt     *string              `json:"resolved_at"`
-	ResolvedByType *string              `json:"resolved_by_type"`
-	ResolvedByID   *string              `json:"resolved_by_id"`
-	SourceTaskID   *string              `json:"source_task_id,omitempty"`
-	Reactions      []ReactionResponse   `json:"reactions"`
-	Attachments    []AttachmentResponse `json:"attachments"`
+	ID             string  `json:"id"`
+	IssueID        string  `json:"issue_id"`
+	AuthorType     string  `json:"author_type"`
+	AuthorID       string  `json:"author_id"`
+	Content        string  `json:"content"`
+	Type           string  `json:"type"`
+	ParentID       *string `json:"parent_id"`
+	CreatedAt      string  `json:"created_at"`
+	UpdatedAt      string  `json:"updated_at"`
+	ResolvedAt     *string `json:"resolved_at"`
+	ResolvedByType *string `json:"resolved_by_type"`
+	ResolvedByID   *string `json:"resolved_by_id"`
+	SourceTaskID   *string `json:"source_task_id,omitempty"`
+	// QuickActionID marks a comment produced by a quick action run (MUL-5465).
+	// The timeline renders those as a collapsed one-line card instead of the
+	// raw prompt body. It is NOT settable through this endpoint — there is no
+	// request field for it — which is exactly why the card keys off this id
+	// rather than a `type` value the client controls.
+	QuickActionID *string              `json:"quick_action_id,omitempty"`
+	Reactions     []ReactionResponse   `json:"reactions"`
+	Attachments   []AttachmentResponse `json:"attachments"`
 	// Orientation stats — populated only on the roots_only path and omitted in
 	// every other mode, so the default response shape stays byte-identical for
 	// existing callers. ReplyCount is the number of descendants in the thread;
@@ -101,6 +107,7 @@ func commentToResponse(c db.Comment, reactions []ReactionResponse, attachments [
 		ResolvedByType: textToPtr(c.ResolvedByType),
 		ResolvedByID:   uuidToPtr(c.ResolvedByID),
 		SourceTaskID:   uuidToPtr(c.SourceTaskID),
+		QuickActionID:  uuidToPtr(c.QuickActionID),
 		Reactions:      reactions,
 		Attachments:    attachments,
 	}
@@ -1117,11 +1124,11 @@ func commentAgentTriggerReason(trigger commentAgentTrigger) string {
 	}
 }
 
-func commentAgentTriggerToResponse(trigger commentAgentTrigger) CommentTriggerAgentResponse {
+func (h *Handler) commentAgentTriggerToResponse(trigger commentAgentTrigger) CommentTriggerAgentResponse {
 	return CommentTriggerAgentResponse{
 		ID:        uuidToString(trigger.Agent.ID),
 		Name:      trigger.Agent.Name,
-		AvatarURL: textToPtr(trigger.Agent.AvatarUrl),
+		AvatarURL: h.resolveAvatarURLPtr(textToPtr(trigger.Agent.AvatarUrl)),
 		Source:    string(trigger.Source),
 		Reason:    commentAgentTriggerReason(trigger),
 	}
@@ -1210,7 +1217,7 @@ func (h *Handler) PreviewCommentTriggers(w http.ResponseWriter, r *http.Request)
 		Blocked: commentBlockedTargetOutcomes(targets),
 	}
 	for _, trigger := range triggers {
-		resp.Agents = append(resp.Agents, commentAgentTriggerToResponse(trigger))
+		resp.Agents = append(resp.Agents, h.commentAgentTriggerToResponse(trigger))
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -1275,6 +1282,16 @@ func (h *Handler) CreateComment(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Type == "" {
 		req.Type = "comment"
+	}
+	// Validate rather than letting the DB CHECK reject it: an unknown type
+	// previously surfaced as a 500 on a constraint violation, which reads as a
+	// server fault for what is plainly bad input. This is also the explicit
+	// refusal of a client trying to author a machine-written kind (MUL-5465
+	// review): a member must not be able to post a comment that renders as
+	// something the system generated.
+	if !isClientAuthorableCommentType(req.Type) {
+		writeError(w, http.StatusBadRequest, "invalid comment type")
+		return
 	}
 
 	var parentID pgtype.UUID
@@ -1436,6 +1453,19 @@ func (h *Handler) CreateComment(w http.ResponseWriter, r *http.Request) {
 	resp.TriggerOutcomes = h.triggerTasksForComment(r.Context(), issue, comment, parentComment, authorType, authorID, originatorUserID, delegationAuthority, suppressAgentIDs)
 
 	writeJSON(w, http.StatusCreated, resp)
+}
+
+// clientAuthorableCommentTypes is what POST /comments accepts. `status_change`
+// and `system` are platform-generated narration, so a client claiming them
+// would be forging system output; they are deliberately absent.
+var clientAuthorableCommentTypes = map[string]struct{}{
+	"comment":         {},
+	"progress_update": {},
+}
+
+func isClientAuthorableCommentType(t string) bool {
+	_, ok := clientAuthorableCommentTypes[t]
+	return ok
 }
 
 // noteCommentPrefix marks a comment as a human-only note. A comment whose first
@@ -2118,12 +2148,19 @@ func (h *Handler) computeCommentAgentTriggers(ctx context.Context, issue db.Issu
 	// creator's authority by commenting on that autopilot's issue.
 
 	mentions := util.ParseMentions(content)
-	if util.HasMentionAll(mentions) {
-		return nil, nil
-	}
 
+	// EXPLICIT @agent / @squad mentions are a direct request and win over the
+	// @all broadcast (MUL-5411). @all only suppresses the IMPLICIT routing
+	// fallbacks (assignee / thread parent / conversation) below — it must not
+	// swallow a target the author named by hand. Before this ordering, a
+	// comment carrying both `@all` and `@Preflight` enqueued nothing at all.
+	// `all` is neither "agent" nor "squad", so it is skipped inside
+	// resolveMentionedAgentCommentTriggers and never enqueues a run of its own.
 	if hasAgentOrSquadMention(mentions) {
 		return h.resolveMentionedAgentCommentTriggers(ctx, issue, mentions, actorType, actorID, opts)
+	}
+	if util.HasMentionAll(mentions) {
+		return nil, nil
 	}
 	if hasMemberMention(mentions) {
 		return nil, nil
@@ -2495,7 +2532,18 @@ func (h *Handler) resolveMentionedAgentCommentTriggers(ctx context.Context, issu
 	for _, m := range mentions {
 		if m.Type == "squad" {
 			// @squad mention → trigger the squad's leader agent.
-			squadUUID := parseUUID(m.ID)
+			// The mention id comes from untrusted comment text and MentionRe
+			// accepts any hex/dash run (`mention://squad/-`), so it is parsed
+			// with the error-returning ParseUUID — the Must* variant would
+			// panic the request, and on the create path the comment row is
+			// already committed by then. A malformed id is indistinguishable
+			// from a well-formed id that owns no squad: same target_unavailable
+			// outcome, no run.
+			squadUUID, err := util.ParseUUID(m.ID)
+			if err != nil {
+				blockTarget("squad", m.ID, ReasonTargetUnavailable)
+				continue
+			}
 			squad, err := h.Queries.GetSquadInWorkspace(ctx, db.GetSquadInWorkspaceParams{
 				ID:          squadUUID,
 				WorkspaceID: issue.WorkspaceID,
@@ -2554,7 +2602,18 @@ func (h *Handler) resolveMentionedAgentCommentTriggers(ctx context.Context, issu
 		if m.Type != "agent" {
 			continue
 		}
-		agentUUID := parseUUID(m.ID)
+		agentUUID, err := util.ParseUUID(m.ID)
+		if err != nil {
+			// Untrusted comment text: MentionRe matches any hex/dash run, so a
+			// malformed id must not reach the panicking Must* parser. A string
+			// that is not a UUID at all cannot name an entity in ANY workspace,
+			// so there is no existence to conceal here and the invoke-permission
+			// code would be a false cause (MUL-5548): report the same
+			// target_unavailable the squad path above already uses. Only the
+			// well-formed-but-unresolved case below stays enumeration-safe.
+			blockTarget("agent", m.ID, ReasonTargetUnavailable)
+			continue
+		}
 		// Load the agent scoped to the current issue's workspace. Using the
 		// bare GetAgent here would let a mention resolve to an agent in a
 		// different workspace, and the visibility check below would then be

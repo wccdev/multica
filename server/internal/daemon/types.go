@@ -90,6 +90,8 @@ type Task struct {
 	NewCommentsSince              string                 `json:"new_comments_since,omitempty"`               // RFC3339 anchor (last run's started_at) the count is measured from; empty on cold start
 	ChatSessionID                 string                 `json:"chat_session_id,omitempty"`                  // non-empty for chat tasks
 	ChatChannelType               string                 `json:"chat_channel_type,omitempty"`                // "slack" when the chat session is backed by an IM channel; empty for a web-only chat. Drives the channel-awareness block in the prompt
+	QuickActionsDisabled          bool                   `json:"quick_actions_disabled,omitempty"`           // sender opted this turn out of follow-up suggestions — skip the suggestion pass at the source
+	RegenerateQuickActionsFor     string                 `json:"regenerate_quick_actions_for,omitempty"`     // set → run ONLY the suggestion pass (no reply) and supplement the named turn's assistant row (MUL-5149 quick-actions refresh)
 	ChatInThread                  bool                   `json:"chat_in_thread,omitempty"`                   // true when the latest @mention was a thread reply; selects which read command the prompt tells the agent to start with
 	ChatMessage                   string                 `json:"chat_message,omitempty"`                     // user message content for chat tasks
 	ChatMessageAttachments        []ChatAttachmentMeta   `json:"chat_message_attachments,omitempty"`         // attachments linked to the chat message; agent uses these to `multica attachment download <id>`
@@ -263,6 +265,20 @@ type TaskResult struct {
 	// session because its rollout was not in the store (MUL-5305). Forwarded to
 	// the terminal report so the server clears the resume pointer and flags the
 	// continuity gap for the next claim. Not part of the wire result itself.
-	SessionRolloutMissing bool             `json:"-"`
-	Usage                 []TaskUsageEntry `json:"usage,omitempty"` // per-model token usage
+	SessionRolloutMissing bool `json:"-"`
+	// RetiredSessionID names a session this run was told to resume and then
+	// abandoned as unresumable (GH #6066). Forwarded on every terminal path,
+	// including the completed one: a fresh-session retry that SUCCEEDS is
+	// precisely when the abandoned id would otherwise stay selectable.
+	RetiredSessionID string `json:"-"`
+	// QuickActionsPending declares on the complete callback that a background
+	// quick-actions suggestion pass will follow for this direct-chat turn
+	// (MUL-5149); the server raises the client's pill placeholder on chat:done.
+	QuickActionsPending bool `json:"-"`
+	// QuickActionsSuggest is the deferred suggestion pass; reportTaskResult
+	// invokes it on its own goroutine only AFTER the completion callback
+	// succeeds, so the user's turn ends immediately and suggestions arrive as a
+	// later chat:quick_actions supplement (MUL-5149).
+	QuickActionsSuggest func()           `json:"-"`
+	Usage               []TaskUsageEntry `json:"usage,omitempty"` // per-model token usage
 }
