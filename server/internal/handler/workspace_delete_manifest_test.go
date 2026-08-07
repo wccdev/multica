@@ -106,6 +106,16 @@ var workspaceDeletionManifest = map[string]workspaceDeleteAction{
 	"webhook_delivery":                workspaceDelete,
 	"workspace":                       workspaceDelete,
 	"workspace_invitation":            workspaceDelete,
+
+	// Fork-only: the retired Gitea vertical (migration 9000). Its data was
+	// migrated into vcs_* by 9001 and the tables are kept only as a historical
+	// safety net — nothing writes them anymore. They still disappear on
+	// workspace teardown because migration 9000 declared ON DELETE CASCADE FKs
+	// to workspace(id) / issue(id), so no explicit deletion step is needed.
+	"gitea_connection":         workspaceDelete,
+	"gitea_pull_request":       workspaceDelete,
+	"gitea_webhook":            workspaceDelete,
+	"issue_gitea_pull_request": workspaceDelete,
 }
 
 func TestWorkspaceDeletionManifestCoversPublicSchema(t *testing.T) {
