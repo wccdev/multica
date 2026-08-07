@@ -18,6 +18,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/dispatch"
 	"github.com/multica-ai/multica/server/internal/issueguard"
 	"github.com/multica-ai/multica/server/internal/logger"
 	"github.com/multica-ai/multica/server/internal/middleware"
@@ -542,6 +543,32 @@ func buildSearchQuery(phrase string, terms []string, queryNum int, hasNum bool, 
 		ELSE 7
 	END`
 
+	// Cancelled issues are abandoned work. statusRank alone cannot keep them
+	// down because it is only a tie-breaker within one relevance tier: a
+	// cancelled issue whose title matches the phrase exactly (tier 1) still
+	// outranks an in_progress issue that merely contains it (tier 3), and a
+	// workspace with many cancelled issues can fill the whole LIMIT window and
+	// push live work off the page entirely. So demote cancelled ahead of
+	// rankExpr — they sort after every other match and are the first rows the
+	// LIMIT drops. Unlike 'done', which is finished work worth referencing,
+	// cancelled work was thrown away. The exception is a direct hit: an exact
+	// identifier or exact title means the user is targeting that one issue and
+	// knows what they asked for.
+	//
+	// The title half reuses tier 1's predicate verbatim, including its quirk:
+	// phraseParam is escapeLike'd, so a title containing _ or % never compares
+	// equal and is not treated as a direct hit. Such an issue is still returned
+	// by number; keeping the two predicates identical matters more than working
+	// around an escaping bug that belongs with tier 1.
+	directHitParts := []string{fmt.Sprintf("LOWER(i.title) = %s", phraseParam)}
+	if hasNum {
+		directHitParts = append(directHitParts, fmt.Sprintf("i.number = %s", numParam))
+	}
+	cancelledRank := fmt.Sprintf(
+		"CASE WHEN i.status = 'cancelled' AND NOT (%s) THEN 1 ELSE 0 END",
+		strings.Join(directHitParts, " OR "),
+	)
+
 	// --- match_source expression ---
 	matchSourceExpr := fmt.Sprintf(`CASE
 		WHEN LOWER(i.title) LIKE %s THEN 'title'
@@ -607,12 +634,13 @@ func buildSearchQuery(phrase string, terms []string, queryNum int, hasNum bool, 
 		%s AS matched_comment_content
 	FROM issue i
 	WHERE i.workspace_id = %s AND %s
-	ORDER BY %s, %s, i.updated_at DESC
+	ORDER BY %s, %s, %s, i.updated_at DESC
 	LIMIT %s OFFSET %s`,
 		matchSourceExpr,
 		commentSubquery,
 		wsParam,
 		whereClause,
+		cancelledRank,
 		rankExpr,
 		statusRank,
 		limitParam,
@@ -2192,11 +2220,11 @@ func (h *Handler) QuickCreateIssue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !agent.RuntimeID.Valid {
-		writeAgentUnavailable(w, "agent has no runtime")
+		writeAgentUnavailable(w, "agent has no runtime", ReasonAgentRuntimeRequired)
 		return
 	}
 	if !h.isRuntimeOnline(r.Context(), agent.RuntimeID) {
-		writeAgentUnavailable(w, "agent's runtime is offline")
+		writeAgentUnavailable(w, "agent's runtime is offline", ReasonRuntimeOffline)
 		return
 	}
 
@@ -2280,12 +2308,17 @@ func (h *Handler) QuickCreateIssue(w http.ResponseWriter, r *http.Request) {
 
 // writeAgentUnavailable returns 422 with a stable error code so the modal
 // can show a "switch agent" hint without parsing the human-readable reason.
-func writeAgentUnavailable(w http.ResponseWriter, reason string) {
+// writeAgentUnavailable refuses a trigger whose agent cannot run. `code` stays
+// agent_unavailable for installed clients; reason_code carries the machine-
+// readable distinction they need to phrase the fix — agent_runtime_required
+// ("bind a runtime") is not runtime_offline ("reconnect the machine").
+func writeAgentUnavailable(w http.ResponseWriter, reason string, reasonCode dispatch.ReasonCode) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusUnprocessableEntity)
 	json.NewEncoder(w).Encode(map[string]any{
-		"code":   "agent_unavailable",
-		"reason": reason,
+		"code":        "agent_unavailable",
+		"reason":      reason,
+		"reason_code": reasonCode,
 	})
 }
 
@@ -3168,13 +3201,7 @@ func (h *Handler) DeleteIssue(w http.ResponseWriter, r *http.Request) {
 	// Fail any linked autopilot runs before delete (ON DELETE SET NULL clears issue_id).
 	h.Queries.FailAutopilotRunsByIssue(r.Context(), issue.ID)
 
-	// Collect all attachment URLs (issue-level + comment-level) before CASCADE delete.
-	attachmentURLs, _ := h.Queries.ListAttachmentURLsByIssueOrComments(r.Context(), issue.ID)
-
-	err := h.Queries.DeleteIssue(r.Context(), db.DeleteIssueParams{
-		ID:          issue.ID,
-		WorkspaceID: issue.WorkspaceID,
-	})
+	attachmentURLs, err := h.deleteIssueAndCollectAttachmentURLs(r.Context(), issue)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to delete issue")
 		return
@@ -3190,6 +3217,41 @@ func (h *Handler) DeleteIssue(w http.ResponseWriter, r *http.Request) {
 	h.publish(protocol.EventIssueDeleted, uuidToString(issue.WorkspaceID), actorType, actorID, map[string]any{"issue_id": resolvedID})
 	slog.Info("issue deleted", append(logger.RequestAttrs(r), "issue_id", resolvedID, "workspace_id", uuidToString(issue.WorkspaceID))...)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// deleteIssueAndCollectAttachmentURLs serializes issue deletion with channel
+// media binding. The delete-side FOR UPDATE conflicts with the binder's
+// FOR KEY SHARE, and URL collection happens only after that lock is held:
+// bind-first means the new URL is collected; delete-first means the bind rolls
+// back without consuming its durable object intent.
+func (h *Handler) deleteIssueAndCollectAttachmentURLs(ctx context.Context, issue db.Issue) ([]string, error) {
+	tx, err := h.TxStarter.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("begin issue delete: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	qtx := h.Queries.WithTx(tx)
+
+	if _, err := qtx.LockIssueForDelete(ctx, db.LockIssueForDeleteParams{
+		ID:          issue.ID,
+		WorkspaceID: issue.WorkspaceID,
+	}); err != nil {
+		return nil, fmt.Errorf("lock issue for delete: %w", err)
+	}
+	attachmentURLs, err := qtx.ListAttachmentURLsByIssueOrComments(ctx, issue.ID)
+	if err != nil {
+		return nil, fmt.Errorf("list issue attachment URLs: %w", err)
+	}
+	if err := qtx.DeleteIssue(ctx, db.DeleteIssueParams{
+		ID:          issue.ID,
+		WorkspaceID: issue.WorkspaceID,
+	}); err != nil {
+		return nil, fmt.Errorf("delete issue: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit issue delete: %w", err)
+	}
+	return attachmentURLs, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -3543,13 +3605,8 @@ func (h *Handler) BatchDeleteIssues(w http.ResponseWriter, r *http.Request) {
 		h.TaskService.CancelTasksForIssue(r.Context(), issue.ID)
 		h.Queries.FailAutopilotRunsByIssue(r.Context(), issue.ID)
 
-		// Collect attachment URLs before CASCADE delete to clean up S3 objects.
-		attachmentURLs, _ := h.Queries.ListAttachmentURLsByIssueOrComments(r.Context(), issue.ID)
-
-		if err := h.Queries.DeleteIssue(r.Context(), db.DeleteIssueParams{
-			ID:          issue.ID,
-			WorkspaceID: issue.WorkspaceID,
-		}); err != nil {
+		attachmentURLs, err := h.deleteIssueAndCollectAttachmentURLs(r.Context(), issue)
+		if err != nil {
 			slog.Warn("batch delete issue failed", "issue_id", issueID, "error", err)
 			continue
 		}
