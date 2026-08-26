@@ -36,9 +36,9 @@ type AgentRuntimeResponse struct {
 	DeviceInfo   string  `json:"device_info"`
 	Metadata     any     `json:"metadata"`
 	OwnerID      *string `json:"owner_id"`
-	// Visibility is "private" (default — only the owner / workspace admins
-	// can bind agents) or "public" (any workspace member can). See migration
-	// 083 and canUseRuntimeForAgent.
+	// Visibility is "private" (default — only the owner can bind agents) or
+	// "public" (any workspace member can). See migration 083 and
+	// canUseRuntimeForAgent.
 	Visibility string `json:"visibility"`
 	// ProfileID is set when this runtime is an instance of a custom
 	// runtime_profile (MUL-3284); null for built-in runtimes.
@@ -109,18 +109,8 @@ type RuntimeUsageResponse struct {
 // same tool).
 func (h *Handler) GetRuntimeUsage(w http.ResponseWriter, r *http.Request) {
 	runtimeID := chi.URLParam(r, "runtimeId")
-	runtimeUUID, ok := parseUUIDOrBadRequest(w, runtimeID, "runtime_id")
+	rt, _, ok := h.requireRuntimeReadAccess(w, r, runtimeID)
 	if !ok {
-		return
-	}
-
-	rt, err := h.Queries.GetAgentRuntime(r.Context(), runtimeUUID)
-	if err != nil {
-		writeError(w, http.StatusNotFound, "runtime not found")
-		return
-	}
-
-	if _, ok := h.requireWorkspaceMember(w, r, uuidToString(rt.WorkspaceID), "runtime not found"); !ok {
 		return
 	}
 
@@ -173,18 +163,8 @@ func (h *Handler) listRuntimeUsage(ctx context.Context, runtimeID pgtype.UUID, t
 // GetRuntimeTaskActivity returns hourly task activity distribution for a runtime.
 func (h *Handler) GetRuntimeTaskActivity(w http.ResponseWriter, r *http.Request) {
 	runtimeID := chi.URLParam(r, "runtimeId")
-	runtimeUUID, ok := parseUUIDOrBadRequest(w, runtimeID, "runtime_id")
+	rt, _, ok := h.requireRuntimeReadAccess(w, r, runtimeID)
 	if !ok {
-		return
-	}
-
-	rt, err := h.Queries.GetAgentRuntime(r.Context(), runtimeUUID)
-	if err != nil {
-		writeError(w, http.StatusNotFound, "runtime not found")
-		return
-	}
-
-	if _, ok := h.requireWorkspaceMember(w, r, uuidToString(rt.WorkspaceID), "runtime not found"); !ok {
 		return
 	}
 
@@ -241,18 +221,8 @@ type RuntimeUsageByAgentResponse struct {
 // since the cutoff window. Drives the runtime-detail "Cost by agent" tab.
 func (h *Handler) GetRuntimeUsageByAgent(w http.ResponseWriter, r *http.Request) {
 	runtimeID := chi.URLParam(r, "runtimeId")
-	runtimeUUID, ok := parseUUIDOrBadRequest(w, runtimeID, "runtime_id")
+	rt, _, ok := h.requireRuntimeReadAccess(w, r, runtimeID)
 	if !ok {
-		return
-	}
-
-	rt, err := h.Queries.GetAgentRuntime(r.Context(), runtimeUUID)
-	if err != nil {
-		writeError(w, http.StatusNotFound, "runtime not found")
-		return
-	}
-
-	if _, ok := h.requireWorkspaceMember(w, r, uuidToString(rt.WorkspaceID), "runtime not found"); !ok {
 		return
 	}
 
@@ -323,18 +293,8 @@ type RuntimeUsageByHourResponse struct {
 // `?tz=` param or the authenticated user's stored user.timezone.
 func (h *Handler) GetRuntimeUsageByHour(w http.ResponseWriter, r *http.Request) {
 	runtimeID := chi.URLParam(r, "runtimeId")
-	runtimeUUID, ok := parseUUIDOrBadRequest(w, runtimeID, "runtime_id")
+	rt, _, ok := h.requireRuntimeReadAccess(w, r, runtimeID)
 	if !ok {
-		return
-	}
-
-	rt, err := h.Queries.GetAgentRuntime(r.Context(), runtimeUUID)
-	if err != nil {
-		writeError(w, http.StatusNotFound, "runtime not found")
-		return
-	}
-
-	if _, ok := h.requireWorkspaceMember(w, r, uuidToString(rt.WorkspaceID), "runtime not found"); !ok {
 		return
 	}
 
@@ -421,6 +381,16 @@ func parseExactSinceParamInTZ(r *http.Request, defaultDays int, tzName string) p
 // parseDaysCutoff is the shared body of the two cutoff parsers. `trimDays`
 // pulls the cutoff forward, so 0 keeps the N+1 headroom and 1 closes the
 // window to exactly N calendar days.
+// dayWindowNow is the clock every `days=N` cutoff reads.
+//
+// A variable so a test can pin it. Without one, a fixture and the cutoff that
+// has to contain it read the wall clock at two different moments — the fixture
+// when it is built, the cutoff when the request is handled, with inserts and a
+// rollup in between. A suite that crosses midnight in that gap builds its run
+// in one day and then asks for the next day's window, and the row it just
+// wrote is excluded. Production always reads the real clock.
+var dayWindowNow = time.Now
+
 func parseDaysCutoff(
 	r *http.Request,
 	defaultDays int,
@@ -441,7 +411,7 @@ func parseDaysCutoff(
 	// window by one would put the cutoff at start-of-today+0 — still correct
 	// ("today only"), which is exactly what days=1 means.
 	return pgtype.Timestamptz{
-		Time:  sinceFromDays(time.Now(), days-trimDays, loc),
+		Time:  sinceFromDays(dayWindowNow(), days-trimDays, loc),
 		Valid: true,
 	}
 }
@@ -489,8 +459,9 @@ func (h *Handler) resolveViewingTZ(r *http.Request) string {
 // (provider, daemon_id, status…) flows in from the daemon and is read-only here.
 type UpdateAgentRuntimeRequest struct {
 	// Visibility flips a runtime between "private" (default — only the owner
-	// or workspace admins can bind agents) and "public" (any workspace
-	// member can). Owner / workspace admin only, gated by canEditRuntime.
+	// can bind agents) and "public" (any workspace member can). Runtime owner
+	// only, gated by canSetRuntimeVisibility — narrower than the rest of this
+	// request, which admins may also send.
 	Visibility *string `json:"visibility,omitempty"`
 	// CustomName sets or clears a user-facing display override (MUL-4217).
 	// An empty / whitespace-only string clears it (revert to the
@@ -511,7 +482,8 @@ const maxRuntimeCustomNameLen = 100
 // UpdateAgentRuntime handles PATCH /api/runtimes/:id. Currently visibility
 // is editable; the request shape is open-ended so future fields (display
 // name, description) can be added without a route change.
-// Workspace-membership-checked; write access is gated by canEditRuntime.
+// Workspace-membership-checked; write access is gated by canEditRuntime, and
+// `visibility` carries the narrower owner-only gate on top (MUL-6126).
 func (h *Handler) UpdateAgentRuntime(w http.ResponseWriter, r *http.Request) {
 	runtimeID := chi.URLParam(r, "runtimeId")
 	runtimeUUID, ok := parseUUIDOrBadRequest(w, runtimeID, "runtime_id")
@@ -552,7 +524,16 @@ func (h *Handler) UpdateAgentRuntime(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "visibility must be 'private' or 'public'")
 			return
 		}
+		// Only a real change is gated. An admin renaming a runtime through a
+		// PATCH-as-PUT client that echoes the unchanged visibility back is not
+		// trying to share anyone's machine, so that no-op is dropped rather
+		// than turned into a 403 — same tolerance UpdateAgent applies to
+		// resubmitted agent permissions.
 		if v != rt.Visibility {
+			if !canSetRuntimeVisibility(member, rt) {
+				writeError(w, http.StatusForbidden, "only the runtime owner can change its visibility")
+				return
+			}
 			newVisibility = v
 			needVisibility = true
 		}
@@ -649,6 +630,34 @@ func canEditRuntime(member db.Member, rt db.AgentRuntime) bool {
 	return rt.OwnerID.Valid && uuidToString(rt.OwnerID) == uuidToString(member.UserID)
 }
 
+// requireRuntimeReadAccess protects runtime data and machine-triggering
+// capabilities. Governance access is deliberately separate: workspace owners
+// and admins may list, rename, or delete another member's private runtime,
+// but a private machine is readable or usable only by its owner. Returning
+// 404 for that case prevents a known runtime ID from becoming an oracle.
+func (h *Handler) requireRuntimeReadAccess(w http.ResponseWriter, r *http.Request, runtimeID string) (db.AgentRuntime, db.Member, bool) {
+	runtimeUUID, ok := parseUUIDOrBadRequest(w, runtimeID, "runtime_id")
+	if !ok {
+		return db.AgentRuntime{}, db.Member{}, false
+	}
+
+	rt, err := h.Queries.GetAgentRuntime(r.Context(), runtimeUUID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "runtime not found")
+		return db.AgentRuntime{}, db.Member{}, false
+	}
+
+	member, ok := h.requireWorkspaceMember(w, r, uuidToString(rt.WorkspaceID), "runtime not found")
+	if !ok || !canUseRuntimeForAgent(member, rt) {
+		if ok {
+			writeError(w, http.StatusNotFound, "runtime not found")
+		}
+		return db.AgentRuntime{}, db.Member{}, false
+	}
+
+	return rt, member, true
+}
+
 func (h *Handler) runtimeHasLiveProfile(ctx context.Context, rt db.AgentRuntime) (bool, error) {
 	if !rt.ProfileID.Valid {
 		return false, nil
@@ -667,38 +676,71 @@ func (h *Handler) runtimeHasLiveProfile(ctx context.Context, rt db.AgentRuntime)
 
 // canUseRuntimeForAgent reports whether a workspace member is allowed to
 // bind a new agent to — or move an existing agent onto — the given runtime.
-// Mirrors canEditRuntime but layers on the runtime's visibility flag so a
-// `public` runtime is usable by anyone in the workspace while a `private`
-// runtime stays bound to its owner. Workspace owners/admins keep an
-// administrative override for both. See migration 083 for the visibility
-// column.
+// A `public` runtime is usable by anyone in the workspace; a `private` one is
+// usable only by its owner, with NO workspace owner/admin override (MUL-6126):
+// a private runtime is someone's own machine, and running an agent on it
+// spends their credentials and their local files, which is not an
+// administrative decision. Sharing it is the owner's call, which is why
+// canSetRuntimeVisibility is owner-only too — otherwise an admin would keep
+// the same override with one extra step.
+//
+// An ownerless runtime is refused whatever its visibility: task claim needs an
+// owner to mint the agent's task token and cancels the task without one
+// (MUL-3292), so binding to one only produces agents that fail at run time.
+//
+// This is the same rule the clients enforce (`isRuntimeUsableForUser` in
+// packages/core/runtimes/access.ts), so UI, API and CLI agree. See migration
+// 083 for the visibility column.
 func canUseRuntimeForAgent(member db.Member, rt db.AgentRuntime) bool {
-	if roleAllowed(member.Role, "owner", "admin") {
-		return true
+	if !rt.OwnerID.Valid {
+		return false
 	}
 	if rt.Visibility == "public" {
 		return true
 	}
+	return uuidToString(rt.OwnerID) == uuidToString(member.UserID)
+}
+
+// canSetRuntimeVisibility reports whether a member may flip this runtime
+// between `private` and `public`. Owner-only, and deliberately narrower than
+// canEditRuntime: visibility is the owner's consent to lend their machine to
+// the workspace, so an admin who could flip it would still hold the override
+// canUseRuntimeForAgent removed. Admins keep canEditRuntime for the
+// organisational actions — rename, delete — that do not hand anyone else's
+// credentials out.
+func canSetRuntimeVisibility(member db.Member, rt db.AgentRuntime) bool {
 	return rt.OwnerID.Valid && uuidToString(rt.OwnerID) == uuidToString(member.UserID)
 }
 
 func (h *Handler) ListAgentRuntimes(w http.ResponseWriter, r *http.Request) {
 	workspaceID := h.resolveWorkspaceID(r)
+	userID, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
+	member, ok := h.requireWorkspaceMember(w, r, workspaceID, "workspace not found")
+	if !ok {
+		return
+	}
 
 	var runtimes []db.AgentRuntime
 	var err error
 
 	if ownerFilter := r.URL.Query().Get("owner"); ownerFilter == "me" {
-		userID, ok := requireUserID(w, r)
-		if !ok {
-			return
-		}
 		runtimes, err = h.Queries.ListAgentRuntimesByOwner(r.Context(), db.ListAgentRuntimesByOwnerParams{
 			WorkspaceID: parseUUID(workspaceID),
 			OwnerID:     parseUUID(userID),
 		})
-	} else {
+	} else if roleAllowed(member.Role, "owner", "admin") {
+		// Governance visibility preserves the existing owner/admin contract:
+		// admins can find a private runtime to rename or delete it, but the
+		// per-runtime read gate still denies data and machine access.
 		runtimes, err = h.Queries.ListAgentRuntimes(r.Context(), parseUUID(workspaceID))
+	} else {
+		runtimes, err = h.Queries.ListVisibleAgentRuntimes(r.Context(), db.ListVisibleAgentRuntimesParams{
+			WorkspaceID: parseUUID(workspaceID),
+			OwnerID:     parseUUID(userID),
+		})
 	}
 
 	if err != nil {

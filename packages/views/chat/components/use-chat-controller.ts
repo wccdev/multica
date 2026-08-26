@@ -277,6 +277,25 @@ export function useChatController(opts?: { isActive?: boolean }) {
     () => setFocusInputRequest((n) => n + 1),
     [],
   );
+  const [starterPromptRequest, setStarterPromptRequest] = useState<{
+    id: number;
+    content: string;
+  } | null>(null);
+  const nextStarterPromptRequestIdRef = useRef(0);
+  const prefillStarterPrompt = useCallback(
+    (prompt: string) => {
+      setStarterPromptRequest({
+        id: ++nextStarterPromptRequestIdRef.current,
+        content: prompt,
+      });
+      requestInputFocus();
+    },
+    [requestInputFocus],
+  );
+  const handleStarterPromptApplied = useCallback(
+    () => setStarterPromptRequest(null),
+    [],
+  );
 
   const currentSession = activeSessionId
     ? sessions.find((s) => s.id === activeSessionId)
@@ -340,6 +359,16 @@ export function useChatController(opts?: { isActive?: boolean }) {
     availableAgents[0] ??
     null;
   const isAgentRuntimeBound = !!activeAgent && hasAgentRuntime(activeAgent);
+
+  // A session outlives the permission that created it. The agent can be flipped
+  // to personal, change owner, or drop this member from its allow-list, and the
+  // server then refuses every send with `invocation_not_allowed` while still
+  // serving the transcript (MUL-4525 — read uses the view gate, send re-runs the
+  // invoke gate). Judge the SESSION's agent, not just the picker list, so the
+  // composer goes read-only up front instead of after the user types
+  // (MUL-6380). Same rule the server enforces, via the shared predicate.
+  const isAgentAccessRevoked =
+    !!activeAgent && !canAssignAgent(activeAgent, user?.id, memberRole);
 
   const agentAvailability = useWorkspaceAgentAvailability();
   const noAgent = agentAvailability === "none";
@@ -464,6 +493,17 @@ export function useChatController(opts?: { isActive?: boolean }) {
       // input is disabled in this state; this is the belt-and-braces guard.
       if (isAgentArchived) {
         apiLogger.warn("sendChatMessage skipped: agent is archived", {
+          sessionId: activeSessionId,
+          agentId: activeAgent.id,
+        });
+        return false;
+      }
+      // Invoke permission was revoked while this session was open. The server
+      // would refuse with a 403 before persisting anything; not attempting the
+      // send keeps the draft and avoids a pointless roundtrip. The input is
+      // disabled in this state — this is the belt-and-braces guard.
+      if (isAgentAccessRevoked) {
+        apiLogger.warn("sendChatMessage skipped: invoke permission revoked", {
           sessionId: activeSessionId,
           agentId: activeAgent.id,
         });
@@ -612,6 +652,7 @@ export function useChatController(opts?: { isActive?: boolean }) {
       activeSessionId,
       activeAgent,
       isAgentArchived,
+      isAgentAccessRevoked,
       pendingTask,
       pendingTaskId,
       isAgentRuntimeBound,
@@ -790,6 +831,7 @@ export function useChatController(opts?: { isActive?: boolean }) {
     currentSession,
     isSessionArchived,
     isAgentArchived,
+    isAgentAccessRevoked,
     isAgentRuntimeBound,
     activeAgent,
     noAgent,
@@ -809,6 +851,9 @@ export function useChatController(opts?: { isActive?: boolean }) {
     handleRestoreDraftApplied,
     // compose-box focus nonce (bumped on new chat)
     focusInputRequest,
+    starterPromptRequest,
+    handleStarterPromptApplied,
+    prefillStarterPrompt,
     // actions
     handleSend,
     handleStop,

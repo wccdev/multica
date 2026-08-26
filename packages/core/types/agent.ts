@@ -49,10 +49,11 @@ export interface AgentInvocationTargetInput {
 
 // Runtime visibility is a separate axis from agent visibility — different
 // vocabulary because it gates a different action. "private" (default) means
-// only the runtime owner and workspace admins can bind agents to it;
-// "public" opens binding to any workspace member. Older backends that
-// haven't shipped MUL-2062 omit the field; the consumer must default to
-// "private" so the strictest behavior is the fallback.
+// only the runtime owner can bind agents to it — workspace admins included,
+// and only the owner may flip the flag (MUL-6126); "public" opens binding to
+// any workspace member. Older backends that haven't shipped MUL-2062 omit the
+// field; the consumer must default to "private" so the strictest behavior is
+// the fallback.
 export type RuntimeVisibility = "private" | "public";
 
 export interface RuntimeDevice {
@@ -118,6 +119,8 @@ export const RUNTIME_PROFILE_PROTOCOL_FAMILIES = [
   "cursor",
   "kimi",
   "reasonix",
+  "dsh",
+  "dim",
   "kiro",
   "antigravity",
   "qoder",
@@ -126,6 +129,8 @@ export const RUNTIME_PROFILE_PROTOCOL_FAMILIES = [
   "grok",
   "qwen",
   "qwenpaw",
+  "mcode",
+  "zeroclaw",
 ] as const;
 
 export type RuntimeProtocolFamily =
@@ -182,6 +187,7 @@ export type TaskFailureReason =
   | "timeout"
   | "codex_semantic_inactivity"
   | "runtime_offline"
+  | "runtime_reconnect_timeout"
   | "runtime_recovery"
   | "manual";
 
@@ -297,7 +303,14 @@ export interface AgentTask {
   error: string | null;
   // Empty string when the task is not in a failed state (the backend uses
   // `omitempty`, so the field may also be missing on non-failed tasks).
-  failure_reason?: TaskFailureReason | "";
+  // Open string on the wire, not a closed enum: the backend's classifier
+  // taxonomy has grown far past TaskFailureReason (21+ refined
+  // `agent_error.*` reasons since MUL-1949, `local_directory_error`, …) and
+  // keeps growing — an installed client will meet reasons its build
+  // predates. TaskFailureReason stays in the union for autocomplete on the
+  // coarse values; `string & {}` admits the rest without collapsing the
+  // hints.
+  failure_reason?: TaskFailureReason | (string & {}) | "";
   created_at: string;
   /** Non-empty when the task was spawned from a chat session. */
   chat_session_id?: string;
@@ -366,6 +379,32 @@ export interface AgentTask {
    * shares and screenshots also stay safe).
    */
   relative_work_dir?: string;
+  /**
+   * Durable directory that replaces `work_dir` after the daemon confirms a
+   * disposable local worktree was finalized and removed. Terminal tasks may
+   * use this for explicit clipboard actions; its absence means `work_dir`
+   * remains authoritative (including preserved-worktree failures and older
+   * daemon/server combinations). This is a point-in-time delivery snapshot;
+   * later resource renames or detachments do not rewrite historical tasks.
+   */
+  durable_work_dir?: string;
+  /**
+   * Privacy-safe display form of `durable_work_dir`. Never render the absolute
+   * durable path directly; older backends omit both fields.
+   */
+  relative_durable_work_dir?: string;
+  /**
+   * Git branch this run delivered its work on. Set only by worktree-mode
+   * local_directory tasks, where the agent never touches the user's working
+   * copy — the branch is the only pointer to what it produced.
+   *
+   * Present on failed runs too: worktree mode commits whatever the agent left
+   * before tearing the worktree down, so a run that died partway still has
+   * something worth finding. Unlike `work_dir` this is safe to render
+   * verbatim; it is a ref inside the user's own repo, not a filesystem path.
+   * Older backends omit it — render conditionally.
+   */
+  branch_name?: string;
   /**
    * Resolved accountable-human provenance of this run (MUL-4302 §9): who it ran
    * "on behalf of", how that was resolved, and the evidence/lineage. Present on
@@ -438,6 +477,8 @@ export interface Agent {
   /** What this agent's owner wrote. For a system agent this holds only the
    *  workspace's own notes — the product half is `system_instructions`. */
   instructions: string;
+  /** Up to three agent-authored first-turn suggestions. Older servers omit it. */
+  starter_prompts?: AgentStarterPrompt[];
   /** Set for product-defined agents (e.g. "mika"). Absent for user- and
    *  template-created agents. Identity for "maintained by Multica" checks —
    *  never the display name, which owners may change. */
@@ -549,6 +590,13 @@ export interface Agent {
   archived_by: string | null;
 }
 
+export interface AgentStarterPrompt {
+  /** Short chip label shown in the empty state. */
+  label: string;
+  /** Full editable text copied into the composer when selected. */
+  prompt: string;
+}
+
 export interface DisabledRuntimeSkill {
   runtime_id: string;
   provider: string;
@@ -586,6 +634,7 @@ export interface CreateAgentRequest {
   name: string;
   description?: string;
   instructions?: string;
+  starter_prompts?: AgentStarterPrompt[];
   avatar_url?: string;
   runtime_id: string;
   runtime_config?: Record<string, unknown>;
@@ -638,6 +687,7 @@ export interface StoredAgentDraft {
   name: string;
   description: string;
   instructions: string;
+  starter_prompts: AgentStarterPrompt[];
   avatar_url: string | null;
   model: string;
   thinking_level: string;
@@ -680,6 +730,7 @@ export interface UpdateAgentRequest {
   name?: string;
   description?: string;
   instructions?: string;
+  starter_prompts?: AgentStarterPrompt[];
   avatar_url?: string;
   runtime_id?: string;
   runtime_config?: Record<string, unknown>;
