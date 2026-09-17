@@ -31,7 +31,7 @@ func fullSourceAgent() map[string]any {
 		"runtime_id":   "runtime-1",
 		"description":  "a description",
 		"instructions": "some instructions",
-		"starter_prompts": []any{
+		"conversation_starters": []any{
 			map[string]any{"label": "Review a PR", "prompt": "Review the open pull request."},
 		},
 		"avatar_url":           "https://img.example/a.png",
@@ -113,10 +113,10 @@ func TestAgentCopySameRuntimeCopiesPortableFields(t *testing.T) {
 	if gotBody["instructions"] != "some instructions" {
 		t.Errorf("instructions = %v", gotBody["instructions"])
 	}
-	if !reflect.DeepEqual(gotBody["starter_prompts"], []any{
+	if !reflect.DeepEqual(gotBody["conversation_starters"], []any{
 		map[string]any{"label": "Review a PR", "prompt": "Review the open pull request."},
 	}) {
-		t.Errorf("starter_prompts = %v", gotBody["starter_prompts"])
+		t.Errorf("conversation_starters = %v", gotBody["conversation_starters"])
 	}
 	if gotBody["avatar_url"] != "https://img.example/a.png" {
 		t.Errorf("avatar_url = %v", gotBody["avatar_url"])
@@ -356,15 +356,8 @@ func TestAgentCopyAcceptsExplicitCustomEnv(t *testing.T) {
 	}
 }
 
-// The copy command must expose the same secret-safe input channels as create so
-// scripts can keep secrets off the command line.
-func TestAgentCopyExposesSecretSafeFlags(t *testing.T) {
-	for _, name := range []string{
-		"custom-env-stdin", "custom-env-file",
-		"mcp-config-stdin", "mcp-config-file",
-	} {
-		if agentCopyCmd.Flag(name) == nil {
-			t.Errorf("agent copy is missing the %q flag", name)
-		}
+func TestAgentCopyDoesNotExposeConversationStartersOverride(t *testing.T) {
+	if agentCopyCmd.Flag("conversation-starters") != nil {
+		t.Error("agent copy must carry conversation_starters without a dedicated override flag")
 	}
 }

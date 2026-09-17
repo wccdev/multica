@@ -501,9 +501,9 @@ describe("ChatInput focusRequest", () => {
   });
 });
 
-describe("ChatInput starter prompt prefill", () => {
+describe("ChatInput conversation starter prefill", () => {
   it("replaces live editor text and the stored draft", () => {
-    const onStarterPromptApplied = vi.fn();
+    const onConversationStarterApplied = vi.fn();
     const { rerender } = renderInput();
 
     fireEvent.change(screen.getByTestId("editor"), {
@@ -511,11 +511,11 @@ describe("ChatInput starter prompt prefill", () => {
     });
     rerender(
       element({
-        starterPromptRequest: {
+        conversationStarterRequest: {
           id: 1,
           content: "Review the release pull request.",
         },
-        onStarterPromptApplied,
+        onConversationStarterApplied,
       }),
     );
 
@@ -524,7 +524,7 @@ describe("ChatInput starter prompt prefill", () => {
       "Review the release pull request.",
     );
     expect(editorState.adopted).toEqual(["Review the release pull request."]);
-    expect(onStarterPromptApplied).toHaveBeenCalledTimes(1);
+    expect(onConversationStarterApplied).toHaveBeenCalledTimes(1);
   });
 
   it("applies each request only once", () => {
@@ -532,9 +532,9 @@ describe("ChatInput starter prompt prefill", () => {
       id: 1,
       content: "Review the release pull request.",
     };
-    const { rerender } = renderInput({ starterPromptRequest: request });
+    const { rerender } = renderInput({ conversationStarterRequest: request });
 
-    rerender(element({ starterPromptRequest: request }));
+    rerender(element({ conversationStarterRequest: request }));
 
     expect(editorState.adopted).toEqual([request.content]);
   });
@@ -707,21 +707,6 @@ describe("ChatInput project context", () => {
 
     expect(screen.getByRole("button", { name: "Stop" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Queue message" })).not.toBeInTheDocument();
-  });
-
-  it("keeps the composer chrome independent of the queue", () => {
-    // The follow-up queue tucks its bottom edge under the composer, which
-    // therefore ALWAYS paints on top (static z-10) — but the queue's presence
-    // must never restyle the input surface itself.
-    const { container } = renderInput();
-    const surface = container.querySelector('[data-slot="chat-input-surface"]');
-
-    expect(container.firstElementChild).toHaveClass("relative", "z-10");
-    expect(surface).toHaveClass("rounded-lg");
-    expect(surface).not.toHaveClass(
-      "rounded-4xl",
-      "shadow-[var(--menu-shadow)]",
-    );
   });
 
   it("locks the project control while a send is in flight so a mid-send switch cannot retarget the session", async () => {

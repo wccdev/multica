@@ -11,7 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/analytics"
-	"github.com/multica-ai/multica/server/internal/dispatch"
+	"github.com/multica-ai/multica/server/internal/entitlement"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/issueguard"
 	"github.com/multica-ai/multica/server/internal/issueposition"
@@ -40,6 +40,9 @@ type IssueService struct {
 	// Metrics as "PostHog only", so leaving it unset is safe.
 	Metrics     *obsmetrics.BusinessMetrics
 	TaskService *TaskService
+	// Entitlements supplies Cloud's effective issue-count instruction. Nil is
+	// the self-hosted unlimited path.
+	Entitlements entitlement.Provider
 }
 
 func NewIssueService(q *db.Queries, tx TxStarter, bus *events.Bus, ac analytics.Client, ts *TaskService) *IssueService {
@@ -208,6 +211,7 @@ type IssueCreateResult struct {
 // Caller-owned validation is limited to transport-shaped checks: title
 // required, RFC3339 date format, assignee pair sanity.
 func (s *IssueService) Create(ctx context.Context, p IssueCreateParams, opts IssueCreateOpts) (IssueCreateResult, error) {
+	issueCountPolicy := ResolveIssueCountPolicy(ctx, s.Entitlements, p.WorkspaceID)
 	tx, err := s.TxStarter.Begin(ctx)
 	if err != nil {
 		return IssueCreateResult{}, fmt.Errorf("begin tx: %w", err)
@@ -310,9 +314,9 @@ func (s *IssueService) Create(ctx context.Context, p IssueCreateParams, opts Iss
 		return IssueCreateResult{DuplicateIssue: &dup}, ErrActiveDuplicate
 	}
 
-	issueNumber, err := qtx.IncrementIssueCounter(ctx, p.WorkspaceID)
+	issueNumber, err := AllocateIssueNumber(ctx, qtx, p.WorkspaceID, issueCountPolicy)
 	if err != nil {
-		return IssueCreateResult{}, fmt.Errorf("increment counter: %w", err)
+		return IssueCreateResult{}, fmt.Errorf("allocate issue number: %w", err)
 	}
 
 	// New issues sort to the top of their (workspace, status) column for
@@ -477,6 +481,9 @@ func (s *IssueService) Create(ctx context.Context, p IssueCreateParams, opts Iss
 	if !opts.AssignedAgentRunFireAt.IsZero() {
 		assignedTaskID = assignedTask.ID
 		if assignedTaskID.Valid {
+			// The deferred task became durable with the issue at commit. Refresh the
+			// daemon's schedule only now so a wakeup can never race uncommitted data.
+			s.TaskService.notifyRuntimeMayHaveWork(assignedTask.RuntimeID, "")
 			if err := s.TaskService.hydrateDeferredChannelIssueTaskOverlay(ctx, assignedTask); err != nil {
 				// Runtime overlays are best-effort on every enqueue path. The task is
 				// already durable and safely deferred, so an optional integration
@@ -642,7 +649,7 @@ func (s *IssueService) PublishAttachmentsChanged(ctx context.Context, issue db.I
 		ActorType:   "member",
 		ActorID:     util.UUIDToString(actorID),
 		Payload: map[string]any{
-			"issue":            IssueToMapWithCategory(ctx, s.Queries, current, workspace.IssuePrefix),
+			"issue":            IssueToMapResolved(ctx, s.Queries, current, workspace.IssuePrefix),
 			"assignee_changed": false,
 			"status_changed":   false,
 			"project_changed":  false,
@@ -721,13 +728,15 @@ func (s *IssueService) maybeEnqueueOnAssign(ctx context.Context, issue db.Issue,
 		return pgtype.UUID{}
 	}
 	// Backlog is the parking lot: nothing runs from it, so nothing here needs
-	// explaining either. A custom status in the backlog category parks the
-	// same way. (MUL-6243)
-	if issuestatus.Effective(ctx, s.Queries, issue.WorkspaceID, issue.Status) == "backlog" {
+	// explaining either. Custom unstarted statuses do not inherit parking.
+	//
+	// Triage refuses for a different reason and so returns just as quietly: the
+	// entry is not yet work anyone agreed to do (MUL-7189 §2.3).
+	if issue.TriageState.Valid || issuestatus.Effective(ctx, s.Queries, issue.WorkspaceID, issue.Status) == "backlog" {
 		return pgtype.UUID{}
 	}
-	verdict, admitted := agentAssigneeVerdict(ctx, s.Queries, issue)
-	if !admitted && verdict.Reason == dispatch.ReasonRuntimeUnusable {
+	verdict, admitted := agentAssigneeVerdict(ctx, s.runtimeLookup(s.Queries), issue)
+	if !admitted && RuntimeBlockedNeedsNotice(verdict.Reason) {
 		// Assignment has no response the assigner reads for this outcome, so the
 		// refusal explains itself on the issue instead of vanishing (MUL-6164).
 		// Only here, not in the create-with-assignee path above: that one runs
@@ -769,14 +778,16 @@ func (s *IssueService) maybeEnqueueOnAssign(ctx context.Context, issue db.Issue,
 func (s *IssueService) shouldEnqueueAgentTaskWithQueries(ctx context.Context, q *db.Queries, issue db.Issue) bool {
 	// Resolved through q, not s.Queries: this runs inside the create
 	// transaction and must see the same snapshot as the rest of it. (MUL-6243)
-	if issuestatus.Effective(ctx, q, issue.WorkspaceID, issue.Status) == "backlog" {
+	// That snapshot is also the only place a just-created Triage issue is
+	// visible, which is why the Triage check belongs on the same read.
+	if issue.TriageState.Valid || issuestatus.Effective(ctx, q, issue.WorkspaceID, issue.Status) == "backlog" {
 		return false
 	}
-	return isAgentAssigneeReadyWithQueries(ctx, q, issue)
+	return isAgentAssigneeReadyWithQueries(ctx, s.runtimeLookup(q), issue)
 }
 
-func isAgentAssigneeReadyWithQueries(ctx context.Context, q *db.Queries, issue db.Issue) bool {
-	_, ok := agentAssigneeVerdict(ctx, q, issue)
+func isAgentAssigneeReadyWithQueries(ctx context.Context, lookup RuntimeLookup, issue db.Issue) bool {
+	_, ok := agentAssigneeVerdict(ctx, lookup, issue)
 	return ok
 }
 
@@ -786,15 +797,15 @@ func isAgentAssigneeReadyWithQueries(ctx context.Context, q *db.Queries, issue d
 //
 // Only a BLOCKED verdict stops the enqueue. A merely offline machine still
 // queues: that work runs when the laptop comes back, and people rely on it.
-func agentAssigneeVerdict(ctx context.Context, q *db.Queries, issue db.Issue) (AgentVerdict, bool) {
+func agentAssigneeVerdict(ctx context.Context, lookup RuntimeLookup, issue db.Issue) (AgentVerdict, bool) {
 	if !issue.AssigneeType.Valid || issue.AssigneeType.String != "agent" || !issue.AssigneeID.Valid {
 		return AgentVerdict{}, false
 	}
-	agent, err := q.GetAgent(ctx, issue.AssigneeID)
+	agent, err := lookup.Queries.GetAgent(ctx, issue.AssigneeID)
 	if err != nil {
 		return AgentVerdict{}, false
 	}
-	verdict, err := AgentReadiness(ctx, q, agent)
+	verdict, err := AgentReadiness(ctx, lookup, agent)
 	if err != nil {
 		return AgentVerdict{}, false
 	}
@@ -802,7 +813,7 @@ func agentAssigneeVerdict(ctx context.Context, q *db.Queries, issue db.Issue) (A
 }
 
 func (s *IssueService) shouldEnqueueSquadLeaderOnAssign(ctx context.Context, issue db.Issue) bool {
-	if issuestatus.Effective(ctx, s.Queries, issue.WorkspaceID, issue.Status) == "backlog" {
+	if issue.TriageState.Valid || issuestatus.Effective(ctx, s.Queries, issue.WorkspaceID, issue.Status) == "backlog" {
 		return false
 	}
 	return s.isSquadLeaderReady(ctx, issue)
@@ -823,7 +834,7 @@ func (s *IssueService) isSquadLeaderReady(ctx context.Context, issue db.Issue) b
 	if err != nil {
 		return false
 	}
-	verdict, err := AgentReadiness(ctx, s.Queries, agent)
+	verdict, err := AgentReadiness(ctx, s.runtimeLookup(s.Queries), agent)
 	if err != nil {
 		return false
 	}
@@ -847,7 +858,7 @@ func (s *IssueService) enqueueSquadLeaderTask(ctx context.Context, issue db.Issu
 	if err != nil || hasPending {
 		return
 	}
-	if _, err := s.TaskService.EnqueueTaskForSquadLeader(ctx, issue, squad.LeaderID, squad.ID, triggerCommentID); err != nil {
+	if _, err := s.TaskService.EnqueueTaskForSquadLeader(ctx, issue, squad.LeaderID, squad.ID, triggerCommentID, OriginDerived); err != nil {
 		slog.Warn("enqueue squad leader task on create failed",
 			"issue_id", util.UUIDToString(issue.ID),
 			"squad_id", util.UUIDToString(squad.ID),

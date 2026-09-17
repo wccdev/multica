@@ -22,6 +22,7 @@ import { api, dispatchReasonCode } from "@multica/core/api";
 import {
   isAgentRuntimeBound,
   useAgentPresenceDetail,
+  useCustomizeConversationStartersHref,
   useWorkspaceAgentAvailability,
 } from "@multica/core/agents";
 import { ActorAvatar } from "../../common/actor-avatar";
@@ -88,7 +89,7 @@ import {
 import { useChatProjectContextSupport } from "./use-chat-project-context-support";
 import { createLogger } from "@multica/core/logger";
 import type { Agent, Attachment, ChatMessage, ChatSession, PendingChatTasksResponse } from "@multica/core/types";
-import { useT } from "../../i18n";
+import { useLocale, useT } from "../../i18n";
 
 const uiLogger = createLogger("chat.ui");
 const apiLogger = createLogger("chat.api");
@@ -143,7 +144,7 @@ export function ChatWindow() {
   const allMessages = [...messagePages].reverse().flatMap((page) => page.messages);
   // Skeleton only shows for an un-cached session fetch. Cached switches
   // return data synchronously — no flash. `enabled: false` (new chat)
-  // keeps isLoading false so the starter prompts aren't hidden.
+  // keeps isLoading false so the conversation starters aren't hidden.
   // Server-authoritative pending task. Survives refresh / reopen / session
   // switch because it's keyed on sessionId in the Query cache; WS events
   // (chat:message / chat:done / task:*) keep it invalidated in real time.
@@ -188,23 +189,23 @@ export function ChatWindow() {
   // Nonce handed to ChatInput to pull focus into the compose box: when a new
   // chat starts (⊕ or switching agent), and whenever the window itself opens.
   const { focusRequest, requestInputFocus } = useChatInputFocus(isOpen);
-  const [starterPromptRequest, setStarterPromptRequest] = useState<{
+  const [conversationStarterRequest, setConversationStarterRequest] = useState<{
     id: number;
     content: string;
   } | null>(null);
-  const nextStarterPromptRequestIdRef = useRef(0);
-  const prefillStarterPrompt = useCallback(
+  const nextConversationStarterRequestIdRef = useRef(0);
+  const prefillConversationStarter = useCallback(
     (prompt: string) => {
-      setStarterPromptRequest({
-        id: ++nextStarterPromptRequestIdRef.current,
+      setConversationStarterRequest({
+        id: ++nextConversationStarterRequestIdRef.current,
         content: prompt,
       });
       requestInputFocus();
     },
     [requestInputFocus],
   );
-  const handleStarterPromptApplied = useCallback(
-    () => setStarterPromptRequest(null),
+  const handleConversationStarterApplied = useCallback(
+    () => setConversationStarterRequest(null),
     [],
   );
 
@@ -270,6 +271,13 @@ export function ChatWindow() {
   // user types (MUL-6380). Mirrors use-chat-controller.ts.
   const isAgentAccessRevoked =
     !!activeAgent && !canAssignAgent(activeAgent, user?.id, memberRole);
+
+  // "Customize" under the starter buttons — the only place the empty state
+  // admits that those buttons are configuration at all.
+  const customizeConversationStartersHref = useCustomizeConversationStartersHref(
+    activeAgent,
+    wsId,
+  );
 
   const projectContextSupport = useChatProjectContextSupport(wsId, activeAgent);
 
@@ -940,7 +948,8 @@ export function ChatWindow() {
         <EmptyState
           agent={activeAgent}
           hasSessions={sessions.length > 0}
-          onPickPrompt={prefillStarterPrompt}
+          onPickPrompt={prefillConversationStarter}
+          customizeHref={customizeConversationStartersHref}
         />
       )}
 
@@ -984,8 +993,8 @@ export function ChatWindow() {
       <ChatInput
         onSend={handleSend}
         restoreDraftRequest={restoreDraftRequest}
-        starterPromptRequest={starterPromptRequest}
-        onStarterPromptApplied={handleStarterPromptApplied}
+        conversationStarterRequest={conversationStarterRequest}
+        onConversationStarterApplied={handleConversationStarterApplied}
         onRestoreDraftApplied={handleRestoreDraftApplied}
         uploadEnabled={!!activeAgent && !isAgentAccessRevoked}
         onStop={handleStop}
@@ -1485,7 +1494,7 @@ function SessionDropdown({
                   setConfirmingStopId(null);
                 }}
                 disabled={stoppingTaskId === pendingTask.task_id}
-                className="inline-flex h-7 items-center rounded px-2 text-micro font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-50"
+                className="inline-flex h-7 items-center rounded-xs px-2 text-micro font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-50"
               >
                 {t(($) => $.session_history.stop_dialog.cancel)}
               </button>
@@ -1501,7 +1510,7 @@ function SessionDropdown({
                   handleConfirmStop(session, pendingTask);
                 }}
                 disabled={stoppingTaskId === pendingTask.task_id}
-                className="inline-flex h-7 items-center rounded px-2 text-micro font-medium text-destructive transition-colors hover:bg-destructive/10 disabled:opacity-50"
+                className="inline-flex h-7 items-center rounded-xs px-2 text-micro font-medium text-destructive transition-colors hover:bg-destructive/10 disabled:opacity-50"
               >
                 {stoppingTaskId === pendingTask.task_id
                   ? t(($) => $.session_history.stop_dialog.confirming)
@@ -1544,8 +1553,8 @@ function SessionDropdown({
                     }}
                     className={
                       action.danger
-                        ? "inline-flex h-7 items-center gap-1 rounded px-1.5 text-micro font-medium text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive focus-visible:bg-destructive/10 focus-visible:text-destructive focus-visible:outline-none"
-                        : "inline-flex size-7 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:bg-accent focus-visible:text-foreground focus-visible:outline-none"
+                        ? "inline-flex h-7 items-center gap-1 rounded-xs px-1.5 text-micro font-medium text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive focus-visible:bg-destructive/10 focus-visible:text-destructive focus-visible:outline-none"
+                        : "inline-flex size-7 items-center justify-center rounded-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:bg-accent focus-visible:text-foreground focus-visible:outline-none"
                     }
                     aria-label={action.label}
                     title={action.label}
@@ -1630,6 +1639,7 @@ function SessionDropdown({
 
 function useFormatTimeAgo(): (dateStr: string) => string {
   const { t } = useT("chat");
+  const locale = useLocale();
   return (dateStr: string) => {
     const date = new Date(dateStr);
     const now = new Date();
@@ -1642,6 +1652,6 @@ function useFormatTimeAgo(): (dateStr: string) => string {
     if (diffMins < 60) return t(($) => $.session_history.time.minutes, { count: diffMins });
     if (diffHours < 24) return t(($) => $.session_history.time.hours, { count: diffHours });
     if (diffDays < 7) return t(($) => $.session_history.time.days, { count: diffDays });
-    return date.toLocaleDateString();
+    return date.toLocaleDateString(locale);
   };
 }

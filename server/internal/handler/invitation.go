@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/analytics"
 	"github.com/multica-ai/multica/server/internal/logger"
@@ -134,28 +136,36 @@ func (h *Handler) CreateInvitation(w http.ResponseWriter, r *http.Request) {
 	if existingUser.ID.Valid {
 		inviteeUserID = existingUser.ID
 	}
-
-	invitationID := uuid.New()
-	expiresAt := time.Now().Add(7 * 24 * time.Hour)
-	if err := h.reserveInvitationCapacity(r.Context(), uuid.UUID(requester.WorkspaceID.Bytes), invitationID, expiresAt); err != nil {
-		writeSeatCapacityError(w, err)
-		return
-	}
-
-	// Consume rate-limit budgets only after capacity is secured. A request that
-	// must purchase a seat can then retry without spending the same invitation
-	// budgets twice. If admission rejects, the durable capacity intent releases
-	// the hold immediately or through the recovery worker.
-	if !h.admitInvitation(
+	admission, ok := h.checkInvitationAdmission(
 		w,
 		r,
 		uuidToString(requester.UserID),
 		uuidToString(requester.WorkspaceID),
 		email,
-	) {
-		h.compensateCapacityIntent(r.Context(), invitationID)
+	)
+	if !ok {
 		return
 	}
+
+	invitationID := uuid.New()
+	expiresAt := time.Now().Add(7 * 24 * time.Hour)
+	if err := h.reserveInvitationCapacity(r.Context(), uuid.UUID(requester.WorkspaceID.Bytes), invitationID, expiresAt); err != nil {
+		if isPersistentSeatCapacityAdmissionRejection(err) {
+			// Full and overcommitted workspaces cannot admit another member until
+			// their durable capacity facts change. Charge repeated attempts to the
+			// actor budget so this endpoint cannot hammer the capacity service,
+			// while preserving workspace and recipient budgets for a later valid
+			// invitation.
+			h.consumeInvitationActorAdmission(r, admission)
+		}
+		writeSeatCapacityError(w, err)
+		return
+	}
+
+	// The non-consuming abuse checks run before Cloud. Spend all budgets only
+	// after Cloud has secured capacity. Persistent capacity rejections spend the
+	// actor budget only in the branch above; transient failures spend none.
+	h.consumeInvitationAdmission(r, admission)
 
 	createParams := db.CreateInvitationParams{
 		ID: uuidToPG(invitationID), WorkspaceID: requester.WorkspaceID, InviterID: requester.UserID,
@@ -471,6 +481,34 @@ func (h *Handler) AcceptInvitation(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if inv.Status != "pending" {
+		// Installed clients can hold a stale pending-invitation row for an
+		// invitation that was already concluded from another surface (the
+		// web invite page, another device). A 400 here leaves that row
+		// stuck: the sidebar swallows the error and keeps showing the row
+		// until restart. Re-accepting is idempotent while the membership
+		// from the first accept still exists — return it so the client's
+		// refetch drops the row. A membership that no longer exists (the
+		// user left the workspace afterwards) still fails: leaving was
+		// explicit and must not be undone by a stale client retry.
+		if inv.Status == "accepted" {
+			member, memberErr := h.Queries.GetMemberByUserAndWorkspace(r.Context(), db.GetMemberByUserAndWorkspaceParams{
+				UserID:      user.ID,
+				WorkspaceID: inv.WorkspaceID,
+			})
+			switch {
+			case memberErr == nil:
+				writeJSON(w, http.StatusOK, h.memberWithUserResponse(member, user))
+				return
+			case errors.Is(memberErr, pgx.ErrNoRows):
+				// The membership from the first accept is gone; fall through
+				// to the 400 below.
+			default:
+				// A transient read failure must surface as 500, not collapse
+				// into the business 400 that clients swallow silently.
+				writeError(w, http.StatusInternalServerError, "failed to load membership")
+				return
+			}
+		}
 		writeError(w, http.StatusBadRequest, "invitation is not pending")
 		return
 	}
@@ -628,7 +666,12 @@ func (h *Handler) DeclineInvitation(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if inv.Status != "pending" {
-		writeError(w, http.StatusBadRequest, "invitation is not pending")
+		// Declining a concluded invitation is a no-op: it was already
+		// accepted, declined, revoked or expired from another surface, and
+		// this invitation is over either way. A stale client holding the
+		// pending row only needs its refetch to drop it, so acknowledge
+		// with 204 instead of a 400 it would swallow silently.
+		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 

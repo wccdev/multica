@@ -50,9 +50,15 @@ type APIClient struct {
 	BaseURL     string
 	WorkspaceID string
 	Token       string
-	AgentID     string // When set, requests are attributed to this agent instead of the user.
-	TaskID      string // When set, sent as X-Task-ID for agent-task validation.
-	HTTPClient  *http.Client
+	// AgentID / TaskID travel as X-Agent-ID / X-Task-ID execution context.
+	// They are NOT what makes the server treat a request as the agent's: the
+	// server strips both headers on entry and re-stamps them from the bound
+	// mat_ task token, so attribution follows the token, not these fields
+	// (MUL-3428). The CLI only sets them inside a daemon-managed task, where
+	// MULTICA_TOKEN is that mat_ token.
+	AgentID    string
+	TaskID     string
+	HTTPClient *http.Client
 
 	// Identity overrides. Empty values fall back to the package-level
 	// ClientPlatform / ClientVersion / ClientOS.
@@ -273,7 +279,7 @@ func (c *APIClient) GetJSON(ctx context.Context, path string, out any) error {
 	if out == nil {
 		return nil
 	}
-	return json.NewDecoder(resp.Body).Decode(out)
+	return wrapBodyRead(req, json.NewDecoder(resp.Body).Decode(out))
 }
 
 // GetJSONWithHeaders performs a GET request, decodes the JSON response, and
@@ -298,7 +304,7 @@ func (c *APIClient) GetJSONWithHeaders(ctx context.Context, path string, out any
 	}
 	if out != nil {
 		if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
-			return resp.Header, err
+			return resp.Header, wrapBodyRead(req, err)
 		}
 	}
 	return resp.Header, nil
@@ -328,7 +334,7 @@ func (c *APIClient) DeleteJSONResponse(ctx context.Context, path string, out any
 		return newHTTPError(http.MethodDelete, path, resp)
 	}
 	if out != nil {
-		return json.NewDecoder(resp.Body).Decode(out)
+		return wrapBodyRead(req, json.NewDecoder(resp.Body).Decode(out))
 	}
 	return nil
 }
@@ -386,7 +392,7 @@ func (c *APIClient) PostJSON(ctx context.Context, path string, body any, out any
 	if out == nil {
 		return nil
 	}
-	return json.NewDecoder(resp.Body).Decode(out)
+	return wrapBodyRead(req, json.NewDecoder(resp.Body).Decode(out))
 }
 
 // PutJSON performs a PUT request with a JSON body.
@@ -416,7 +422,7 @@ func (c *APIClient) PutJSON(ctx context.Context, path string, body any, out any)
 	if out == nil {
 		return nil
 	}
-	return json.NewDecoder(resp.Body).Decode(out)
+	return wrapBodyRead(req, json.NewDecoder(resp.Body).Decode(out))
 }
 
 // PatchJSON performs a PATCH request with a JSON body.
@@ -446,7 +452,7 @@ func (c *APIClient) PatchJSON(ctx context.Context, path string, body any, out an
 	if out == nil {
 		return nil
 	}
-	return json.NewDecoder(resp.Body).Decode(out)
+	return wrapBodyRead(req, json.NewDecoder(resp.Body).Decode(out))
 }
 
 // AttachmentResponse mirrors the server's upload-file response.
@@ -698,7 +704,7 @@ func (c *APIClient) ImportSkillFile(ctx context.Context, fileData []byte, filena
 	if out == nil {
 		return nil
 	}
-	return json.NewDecoder(resp.Body).Decode(out)
+	return wrapBodyRead(req, json.NewDecoder(resp.Body).Decode(out))
 }
 
 // UploadPrivatePlugin installs workspace-private Plugin archive bytes. The
@@ -736,7 +742,7 @@ func (c *APIClient) UploadPrivatePlugin(ctx context.Context, path string, archiv
 	if out == nil {
 		return nil
 	}
-	return json.NewDecoder(resp.Body).Decode(out)
+	return wrapBodyRead(req, json.NewDecoder(resp.Body).Decode(out))
 }
 
 // DownloadFile downloads a file from the given URL and returns the response body.

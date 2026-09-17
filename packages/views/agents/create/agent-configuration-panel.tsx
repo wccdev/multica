@@ -27,7 +27,7 @@ import { ThinkingSettingField } from "../components/inspector/thinking-prop-row"
 import { ModelDropdown } from "../components/model-dropdown";
 import { RuntimePicker } from "../components/runtime-picker";
 import { SkillMultiSelect } from "../components/skill-multi-select";
-import { StarterPromptsEditor } from "../components/starter-prompts-editor";
+import { ConversationStartersEditor } from "../components/conversation-starters-editor";
 
 const PERMISSION_SCOPES: AgentPermissionScope[] = [
   "private",
@@ -68,8 +68,8 @@ export function AgentConfigurationPanel({
   runtimeSwitchInFlight?: boolean;
 }) {
   const { t } = useT("agents");
-  const starterPromptsSupported = useConfigStore(
-    (state) => state.agentStarterPromptsSupported,
+  const conversationStartersSupported = useConfigStore(
+    (state) => state.agentConversationStartersSupported,
   );
   const selectedRuntime =
     runtimes.find((runtime) => runtime.id === draft.runtimeId) ?? null;
@@ -95,7 +95,6 @@ export function AgentConfigurationPanel({
     <div className={cn("space-y-8", compact && "space-y-6")}>
       <SettingsSection
         title={t(($) => $.creation_studio.sections.identity)}
-        description={t(($) => $.creation_studio.sections.identity_hint)}
       >
         <SettingsCard>
           <DraftFieldRow
@@ -153,7 +152,6 @@ export function AgentConfigurationPanel({
 
       <SettingsSection
         title={t(($) => $.creation_studio.sections.behavior)}
-        description={t(($) => $.creation_studio.sections.behavior_hint)}
       >
         <SettingsCard>
           <DraftFieldRow
@@ -175,11 +173,11 @@ export function AgentConfigurationPanel({
               className="min-h-44 resize-y font-mono text-label leading-6"
             />
           </DraftFieldRow>
-          {starterPromptsSupported ? (
+          {conversationStartersSupported ? (
             <div className="px-4 py-4">
-              <StarterPromptsEditor
-                value={draft.starterPrompts}
-                onChange={(value) => set("starterPrompts", value)}
+              <ConversationStartersEditor
+                value={draft.conversationStarters}
+                onChange={(value) => set("conversationStarters", value)}
               />
             </div>
           ) : null}
@@ -245,7 +243,6 @@ export function AgentConfigurationPanel({
 
       <SettingsSection
         title={t(($) => $.creation_studio.sections.access)}
-        description={t(($) => $.creation_studio.sections.access_hint)}
       >
         <SettingsCard>
           <div
