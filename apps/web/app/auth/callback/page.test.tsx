@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import type { SupportedLocale } from "@multica/core/i18n";
+import type { User } from "@multica/core/types";
 import { I18nProvider } from "@multica/core/i18n/react";
 import { paths } from "@multica/core/paths";
 import { RESOURCES } from "@multica/views/locales";
@@ -53,11 +54,14 @@ const makeUser = (
     onboarded_at: string | null;
     onboarding_questionnaire: Record<string, unknown>;
   }> = {},
-) => ({
+): User => ({
   id: "user-1",
   name: "Test",
   email: "test@multica.ai",
   avatar_url: null,
+  language: null,
+  profile_description: "",
+  timezone: null,
   onboarded_at: null,
   onboarding_questionnaire: { source: ["search"] },
   created_at: "2026-01-01T00:00:00Z",
