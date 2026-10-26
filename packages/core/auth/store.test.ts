@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
 import type { ApiClient } from "../api/client";
 import type { StorageAdapter, User } from "../types";
@@ -33,6 +34,68 @@ function makeApi(): ApiClient {
 }
 
 describe("authStore", () => {
+  it.each([false, true])(
+    "completes Casdoor login and clears expired state (cookieAuth=%s)",
+    async (cookieAuth) => {
+      const storage = makeStorage();
+      const api = {
+        setToken: vi.fn(),
+        casdoorLogin: vi.fn().mockResolvedValue({
+          token: "casdoor-token",
+          user: fakeUser,
+        }),
+      } as unknown as ApiClient;
+      const onLogin = vi.fn();
+      const store = createAuthStore({ api, storage, onLogin, cookieAuth });
+      store.setState({ status: "authenticating", isLoading: true, expired: true });
+
+      const user = await store.getState().loginWithCasdoor(
+        "casdoor-code",
+        "https://app.example.com/auth/callback",
+      );
+
+      expect(api.casdoorLogin).toHaveBeenCalledWith(
+        "casdoor-code",
+        "https://app.example.com/auth/callback",
+      );
+      expect(user).toEqual(fakeUser);
+      expect(store.getState()).toMatchObject({
+        user: fakeUser,
+        status: "authenticated",
+        isLoading: false,
+        expired: false,
+      });
+      expect(onLogin).toHaveBeenCalledOnce();
+      if (cookieAuth) {
+        expect(storage.snapshot().multica_token).toBeUndefined();
+        expect(api.setToken).not.toHaveBeenCalled();
+      } else {
+        expect(storage.snapshot().multica_token).toBe("casdoor-token");
+        expect(api.setToken).toHaveBeenCalledWith("casdoor-token");
+      }
+    },
+  );
+
+  it("leaves the user signed out when Casdoor rejects the login", async () => {
+    const storage = makeStorage();
+    const api = {
+      setToken: vi.fn(),
+      casdoorLogin: vi.fn().mockRejectedValue(new Error("invalid code")),
+    } as unknown as ApiClient;
+    const onLogin = vi.fn();
+    const store = createAuthStore({ api, storage, onLogin });
+    store.setState({ status: "unauthenticated", isLoading: false });
+
+    await expect(
+      store.getState().loginWithCasdoor("invalid", "https://app.example.com/auth/callback"),
+    ).rejects.toThrow("invalid code");
+
+    expect(store.getState()).toMatchObject({ user: null, status: "unauthenticated" });
+    expect(storage.snapshot().multica_token).toBeUndefined();
+    expect(api.setToken).not.toHaveBeenCalled();
+    expect(onLogin).not.toHaveBeenCalled();
+  });
+
   it("publishes a retry request instead of silently ignoring it", () => {
     const storage = makeStorage({ multica_token: "t" });
     const api = makeApi();

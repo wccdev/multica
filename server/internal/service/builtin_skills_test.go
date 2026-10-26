@@ -437,7 +437,6 @@ func TestPlatformSkillCoversPlatformContracts(t *testing.T) {
 				// home, so losing one here loses it everywhere.
 				"A name is not an id",
 				"`--output json` writes to stdout",
-				"`--no-start` when you are only recording",
 				"categories describe lifecycle only",
 				"Custom statuses do not inherit built-in automation behavior",
 				"Comment reads stay bounded",
@@ -449,6 +448,7 @@ func TestPlatformSkillCoversPlatformContracts(t *testing.T) {
 				"that read is the bounded scan",
 			},
 			notWant: []string{
+				"--no-start",
 				// The singular forms this replaced.
 				"open the ONE reference",
 				"there is never a reason to read all eight",
@@ -467,11 +467,10 @@ func TestPlatformSkillCoversPlatformContracts(t *testing.T) {
 				// both halves of it are pinned: a syntax problem is repairable
 				// by editing the PR, and an integration problem is not — an
 				// agent that keeps editing burns deliveries on a no-op.
-				"editing the title or adding a closing keyword re-runs the scan",
+				"editing the title re-runs the scan",
 				"stop editing the PR blind",
 				"whether the installation is bound to this workspace",
 				"redelivered once the receiving side is fixed",
-				"unless the issue should auto-advance",
 				"include the PR URL when a PR exists",
 				"Closes MUL-123",
 				"--status backlog",
@@ -486,7 +485,7 @@ func TestPlatformSkillCoversPlatformContracts(t *testing.T) {
 				// playbook — if they leave, the brief pointer dangles.
 				"todo starts work now, backlog parks it",
 				"`--stage <N>`",
-				"when a whole stage finishes",
+				"wakes the parent assignee when a stage",
 				"multica issue status <child-id> todo",
 				// MUL-6966 phase 1 retired the metadata write discipline
 				// along with the brief section that pointed here. What the
@@ -495,6 +494,13 @@ func TestPlatformSkillCoversPlatformContracts(t *testing.T) {
 				// the routing rule they encoded.
 				"workflow state a human should see and filter by goes in",
 				"goes in the result comment",
+				// #8001: --property comparisons. The op-by-type table is the
+				// only thing between an agent and a silently empty page, and
+				// the two rejections are the cases it would otherwise retry.
+				"Comparisons use the same flag",
+				"`~=` (contains, case-insensitive)",
+				"`!=` is rejected (the server has no not-equal filter)",
+				"so they do not form a range",
 				// #7768: nothing about concurrent runs is pushed into the
 				// prompt any more (MUL-6984), so the skill has to carry the
 				// pull path itself. All three anchors are load-bearing — the
@@ -513,6 +519,7 @@ func TestPlatformSkillCoversPlatformContracts(t *testing.T) {
 				"`value` keeps the stored ids",
 			},
 			notWant: []string{
+				"--no-start",
 				// MUL-6966 phase 1: this reference must not teach the KV bag
 				// at all — not as a section, not as a command, and not as a
 				// named key inside a warning. A blanket ban on the vocabulary
@@ -526,6 +533,9 @@ func TestPlatformSkillCoversPlatformContracts(t *testing.T) {
 				"High-signal keys",
 				"reuse these names so queries stay consistent",
 				"scratchpad for run state",
+				// #8001 replaced the reservation with the operators; a bullet
+				// that says only `=` works would contradict the one below it.
+				"Only `=` is supported today",
 				// Per-turn workflow the runtime brief owns; duplicating it here
 				// is how the two drift apart.
 				"Start from the trigger, not from memory",
@@ -597,6 +607,10 @@ func TestPlatformSkillCoversPlatformContracts(t *testing.T) {
 				"--roots-only --summary",
 				"--thread <thread-id> --tail 30",
 				"scan the roots first, then open the threads",
+				// MUL-5850: the reads carry --compact, matching the brief and
+				// the router's bounded-reads rule.
+				"--roots-only --summary --compact --output json",
+				"--thread <thread-id> --tail 30 --compact --output json",
 			},
 			notWant: []string{
 				// MUL-5696: no unbounded comment pull. Both shapes contradict

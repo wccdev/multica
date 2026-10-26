@@ -11,6 +11,7 @@ const {
   mockRouter,
   mockSearchParams,
   mockLoginWithGoogle,
+  mockLoginWithCasdoor,
   mockListWorkspaces,
   mockListMyInvitations,
   mockSetQueryData,
@@ -23,6 +24,7 @@ const {
     mockRouter: { push: mockPush },
     mockSearchParams: new URLSearchParams(),
     mockLoginWithGoogle: vi.fn(),
+    mockLoginWithCasdoor: vi.fn(),
     mockListWorkspaces: vi.fn(),
     mockListMyInvitations: vi.fn(),
     mockSetQueryData,
@@ -82,7 +84,10 @@ vi.mock("@multica/core/auth", async () => {
   return {
     ...actual,
     useAuthStore: (selector: (s: unknown) => unknown) =>
-      selector({ loginWithGoogle: mockLoginWithGoogle }),
+      selector({
+        loginWithGoogle: mockLoginWithGoogle,
+        loginWithCasdoor: mockLoginWithCasdoor,
+      }),
   };
 });
 
@@ -103,6 +108,7 @@ vi.mock("@multica/core/api", async () => {
       listWorkspaces: mockListWorkspaces,
       listMyInvitations: mockListMyInvitations,
       googleLogin: vi.fn(),
+      casdoorLogin: vi.fn(),
     },
   };
 });
@@ -136,6 +142,7 @@ describe("CallbackPage", () => {
     );
     mockSearchParams.set("code", "test-code");
     mockLoginWithGoogle.mockResolvedValue(makeUser());
+    mockLoginWithCasdoor.mockResolvedValue(makeUser());
     mockListWorkspaces.mockResolvedValue([]);
     mockListMyInvitations.mockResolvedValue([]);
   });
@@ -256,6 +263,21 @@ describe("CallbackPage", () => {
     expect(mockPush).not.toHaveBeenCalled();
   });
 
+  it("completes Casdoor web login and preserves the requested destination", async () => {
+    mockSearchParams.set("state", "provider:casdoor,next:/invite/abc123");
+
+    renderCallback();
+
+    await waitFor(() => {
+      expect(mockPush).toHaveBeenCalledWith("/invite/abc123");
+    });
+    expect(mockLoginWithCasdoor).toHaveBeenCalledWith(
+      "test-code",
+      `${window.location.origin}/auth/callback`,
+    );
+    expect(mockLoginWithGoogle).not.toHaveBeenCalled();
+  });
+
   it("unonboarded user honors a safe next= (e.g. /invite/{id}) so invitees aren't trapped", async () => {
     mockSearchParams.set("state", "next:/invite/abc123");
     renderCallback();
@@ -355,9 +377,11 @@ describe("CallbackPage", () => {
     });
   });
 
-  it("redirects to CLI callback with token when state contains valid cli_callback", async () => {
+  it.each(["google", "casdoor"] as const)("redirects to CLI callback with a %s token", async (provider) => {
     const { api: mockedApi } = await import("@multica/core/api");
-    const mockGoogleLogin = mockedApi.googleLogin as ReturnType<typeof vi.fn>;
+    const mockOAuthLogin = vi.mocked(
+      provider === "casdoor" ? mockedApi.casdoorLogin : mockedApi.googleLogin,
+    );
 
     const hrefSetter = vi.fn();
     const originalLocation = window.location;
@@ -370,14 +394,14 @@ describe("CallbackPage", () => {
     try {
       mockSearchParams.set(
         "state",
-        "cli_callback:http://127.0.0.1:46233/callback,cli_state:abc123",
+        `provider:${provider},cli_callback:http://127.0.0.1:46233/callback,cli_state:abc123`,
       );
-      mockGoogleLogin.mockResolvedValue({ token: "cli-jwt-token" });
+      mockOAuthLogin.mockResolvedValue({ token: "cli-jwt-token", user: makeUser() });
 
       renderCallback();
 
       await waitFor(() => {
-        expect(mockGoogleLogin).toHaveBeenCalledWith(
+        expect(mockOAuthLogin).toHaveBeenCalledWith(
           "test-code",
           expect.stringContaining("/auth/callback"),
         );
